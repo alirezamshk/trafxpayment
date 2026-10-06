@@ -180,3 +180,22 @@ describe('TON parsing', () => {
     expect(parseInternalTransfer(beginCell().storeUint(0x7362d09c, 32).endCell().toBoc().toString('base64'))).toBeNull();
   });
 });
+
+describe('toncenter client', () => {
+  it('spaces requests without an API key and retries a 429 once', async () => {
+    const { vi } = await import('vitest');
+    const { toncenterApi } = await import('../src/watchers/ton.js');
+    const times: number[] = [];
+    vi.stubGlobal('fetch', async () => {
+      times.push(Date.now());
+      return times.length === 2
+        ? new Response('{"code":429}', { status: 429 })
+        : new Response(JSON.stringify({ transactions: [] }), { status: 200 });
+    });
+    const api = toncenterApi('https://toncenter.test', undefined);
+    await Promise.all([api.transactions('a', undefined, 1, 1), api.transactions('b', undefined, 1, 1)]);
+    vi.unstubAllGlobals();
+    expect(times).toHaveLength(3);
+    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(1050);
+  }, 15000);
+});

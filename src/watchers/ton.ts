@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { getCursor, pool, setCursor } from '../db.js';
 import type { AssetDef, ChainDef } from '../chains/assets.js';
 import type { InvoiceService } from '../services/invoices.js';
-import { fetchJson, type Logger, type Watcher } from './types.js';
+import { fetchJson as rawFetchJson, type Logger, type Watcher } from './types.js';
 
 export const OP_INTERNAL_TRANSFER = 0x178d4519;
 const DUST_NANOTON = 10_000_000n; // 0.01 TON — ignore smaller unmatched spam
@@ -31,9 +31,32 @@ export interface TonApi {
   jettonWalletAddress(master: string, owner: string): Promise<string>;
 }
 
+// toncenter allows ~1 request/second without an API key and ~10/s with one. All calls in the
+// process go through one queue so we stay under the limit, and a 429 is retried once.
+let tonQueue: Promise<unknown> = Promise.resolve();
+let lastTonCall = 0;
+
+function tonThrottled<T>(minIntervalMs: number, fn: () => Promise<T>): Promise<T> {
+  const run = async () => {
+    const wait = lastTonCall + minIntervalMs - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastTonCall = Date.now();
+    return fn();
+  };
+  const next = tonQueue.then(run, run);
+  tonQueue = next.catch(() => undefined);
+  return next;
+}
+
 export function toncenterApi(baseUrl = config.TON_API_URL, apiKey = config.TON_API_KEY): TonApi {
   const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json' };
   if (apiKey) headers['X-API-Key'] = apiKey;
+  const interval = apiKey ? 120 : 1100;
+  const fetchJson = <T>(url: string, init: RequestInit = {}): Promise<T> =>
+    tonThrottled(interval, () => rawFetchJson<T>(url, init)).catch((err: Error) => {
+      if (!/HTTP 429/.test(err.message)) throw err;
+      return tonThrottled(interval * 2, () => rawFetchJson<T>(url, init));
+    });
   return {
     async transactions(account, startLt, startUtime, limit) {
       const u = new URL(`${baseUrl}/transactions`);
