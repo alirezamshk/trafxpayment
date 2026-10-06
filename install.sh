@@ -34,7 +34,7 @@ ask() { # ask VAR "prompt" [default]
 # ---------------------------------------------------------------- packages
 say "Installing system packages"
 apt-get update -qq
-apt-get install -y -qq git curl openssl ufw cron >/dev/null
+apt-get install -y -qq git curl openssl ufw cron iproute2 >/dev/null
 if ! command -v docker >/dev/null 2>&1; then
   say "Installing Docker"
   curl -fsSL https://get.docker.com | sh
@@ -47,11 +47,40 @@ ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
 
+# ---------------------------------------------------------------- ports 80/443 must be free for caddy
+busy_ports() { ss -ltnpH '( sport = :80 or sport = :443 )' 2>/dev/null | grep -v docker-proxy || true; }
+if [ -n "$(busy_ports)" ]; then
+  for svc in caddy nginx apache2 httpd; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      warn "System service '$svc' is using port 80/443 — stopping and disabling it (the gateway runs its own HTTPS proxy)"
+      systemctl disable --now "$svc" >/dev/null 2>&1 || true
+    fi
+  done
+  if [ -n "$(busy_ports)" ]; then
+    busy_ports
+    die "Ports 80/443 are used by the program(s) above. Stop them, then re-run: sudo bash install.sh"
+  fi
+fi
+
+install_backup_cron() {
+  mkdir -p /opt/backups
+  printf '%s\n' \
+    'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    "0 3 * * * root cd $APP_DIR && docker compose exec -T db pg_dump -U postgres trafxpayment | gzip > /opt/backups/db-\$(date +\\%F).sql.gz && find /opt/backups -name 'db-*.sql.gz' -mtime +14 -delete" \
+    > /etc/cron.d/trafxpayment-backup
+  chmod 644 /etc/cron.d/trafxpayment-backup
+}
+
 # ---------------------------------------------------------------- already installed? just update
 if [ -f .env ]; then
-  say "Existing installation found (.env present) — rebuilding and restarting only"
+  say "Existing installation found (.env present) — rebuilding and restarting only (keys are kept)"
   docker compose up -d --build
+  install_backup_cron
   docker compose ps
+  echo
+  echo "Create / reset the admin login:"
+  echo "  docker compose run --rm api node dist/bin/create-admin.js --email you@example.com --password 'min-10-chars'"
+  echo "Show the 24 recovery words:  grep SIGNER_MNEMONIC $APP_DIR/.env.signer"
   exit 0
 fi
 
@@ -138,12 +167,7 @@ docker compose run --rm -T api node dist/bin/create-admin.js --email "$ADMIN_EMA
 
 # ---------------------------------------------------------------- daily DB backup
 say "Installing daily database backup (/opt/backups, kept 14 days)"
-mkdir -p /opt/backups
-cat > /etc/cron.d/trafxpayment-backup <<EOF
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-0 3 * * * root cd $APP_DIR && docker compose exec -T db pg_dump -U postgres trafxpayment | gzip > /opt/backups/db-\$(date +\%F).sql.gz && find /opt/backups -name 'db-*.sql.gz' -mtime +14 -delete
-EOF
-chmod 644 /etc/cron.d/trafxpayment-backup
+install_backup_cron
 
 # ---------------------------------------------------------------- summary
 cat <<EOF
