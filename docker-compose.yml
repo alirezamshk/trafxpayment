@@ -21,9 +21,20 @@ services:
   api:
     build: .
     env_file: .env
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"] # public traffic goes through caddy (HTTPS)
     restart: unless-stopped
     depends_on: { migrate: { condition: service_completed_successfully } }
+
+  caddy:
+    image: caddy:2-alpine
+    env_file: .env # DOMAIN, ACME_EMAIL
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on: [api]
 
   worker:
     build: .
@@ -41,3 +52,5 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

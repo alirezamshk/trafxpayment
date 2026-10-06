@@ -34,23 +34,24 @@
 - مسیرها: آدرس فاکتورها `m/44'/60'/0'/0/i` و `m/44'/195'/0'/0/i`؛ کیف داغ `m/44'/{60,195}'/1'/0/0`؛ TON `m/44'/607'/0'` (SLIP‑10، wallet v4).
 - هش تراکنش تسویه **قبل از ارسال** در دیتابیس ذخیره می‌شود تا پس از کرش، پرداخت دوباره انجام نشود.
 
-## راه‌اندازی
+## نصب روی سرور (Ubuntu 22.04 / 24.04)
+
+پیش‌نیاز: سرور خارج از ایران و یک دامنه که رکورد A آن به IP سرور اشاره کند.
 
 ```bash
-npm install
-npm run keys:generate        # mnemonic + xpub ها + آدرس کیف‌های داغ را چاپ می‌کند
-cp .env.example .env         # EVM_XPUB, TRON_XPUB, TON_TREASURY_ADDRESS, RPC ها و API key ها
-cp .env.signer.example .env.signer   # SIGNER_MNEMONIC (فقط سرور signer)
-docker compose up -d --build
-docker compose run --rm api node dist/bin/create-admin.js --email you@site.com --password '...'
+git clone -b claude/lucid-hamilton-aez7rd https://github.com/alirezamshk/trafxpayment.git /opt/trafxpayment
+cd /opt/trafxpayment
+sudo bash install.sh
 ```
 
-سپس:
-1. کیف‌های داغ را برای کارمزد شبکه شارژ کنید (ETH/BNB/POL، TRX، TON).
-2. به `/admin` بروید، پذیرنده بسازید و کارمزدش را تعیین کنید (کلید API اولیه نمایش داده می‌شود).
-3. پذیرنده در `/panel` آدرس تسویه هر ارز و زمان‌بندی را تنظیم می‌کند.
+اسکریپت Docker، فایروال، HTTPS (Caddy)، دیتابیس، کلیدهای کیف پول، حساب مدیر و پشتیبان‌گیری روزانه را راه‌اندازی می‌کند و در پایان ۲۴ کلمه بازیابی را **یک بار** نشان می‌دهد؛ روی کاغذ بنویسید.
+اجرای دوباره روی سرور نصب‌شده فقط rebuild و restart می‌کند و کلیدها را تغییر نمی‌دهد.
 
-توسعه محلی: `npm run migrate`، `npm run dev:api`، `npm run dev:worker`، `npm run dev:signer`.
+به‌روزرسانی: `cd /opt/trafxpayment && git pull && docker compose up -d --build`
+
+بعد از نصب: کیف‌های داغ را برای کارمزد شبکه شارژ کنید، در `/admin` پذیرنده بسازید، و پذیرنده در `/panel` آدرس تسویه و زمان‌بندی را تنظیم کند.
+
+توسعه محلی: `npm install`، `npm run migrate`، `npm run dev:api`، `npm run dev:worker`، `npm run dev:signer`.
 
 ## API پذیرنده
 
