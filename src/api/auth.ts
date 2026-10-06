@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import { pool } from '../db.js';
@@ -31,6 +32,29 @@ function unauthorized(reply: FastifyReply, message = 'Unauthorized') {
   return reply.code(401).send({ error: { code: 'unauthorized', message } });
 }
 
+/** "1.2.3.4", "2001:db8::1" or a CIDR range such as "10.0.0.0/24". */
+export function isValidIpRule(rule: string): boolean {
+  const [ip = '', bits] = rule.split('/');
+  const v = isIP(ip);
+  if (!v) return false;
+  if (bits === undefined) return true;
+  const n = Number(bits);
+  return Number.isInteger(n) && n >= 0 && n <= (v === 4 ? 32 : 128);
+}
+
+export function ipAllowed(ip: string, rules: string[]): boolean {
+  const addr = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+  const family = isIP(addr) === 6 ? 'ipv6' : 'ipv4';
+  const list = new BlockList();
+  for (const r of rules) {
+    const [a = '', bits] = r.split('/');
+    const t = isIP(a) === 6 ? 'ipv6' : 'ipv4';
+    if (bits !== undefined) list.addSubnet(a, Number(bits), t);
+    else list.addAddress(a, t);
+  }
+  return list.check(addr, family);
+}
+
 /** Server-to-server API: `Authorization: Bearer <key>` or `X-API-Key: <key>`. */
 export async function requireApiKey(req: FastifyRequest, reply: FastifyReply) {
   const auth = req.headers.authorization;
@@ -38,6 +62,9 @@ export async function requireApiKey(req: FastifyRequest, reply: FastifyReply) {
   if (!key) return unauthorized(reply, 'Missing API key');
   const merchant = await findMerchantByApiKey(pool, key);
   if (!merchant) return unauthorized(reply, 'Invalid API key');
+  if (merchant.allowed_ips?.length && !ipAllowed(req.ip, merchant.allowed_ips)) {
+    return reply.code(403).send({ error: { code: 'ip_not_allowed', message: `API key not allowed from ${req.ip}` } });
+  }
   req.merchant = merchant;
 }
 

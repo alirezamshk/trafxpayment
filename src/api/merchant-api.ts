@@ -7,7 +7,7 @@ import { invoices, ledger } from '../services/index.js';
 import type { InvoiceRow } from '../services/invoices.js';
 import type { PayoutRow } from '../services/ledger.js';
 import { requireApiKey } from './auth.js';
-import { parse } from './util.js';
+import { httpError, parse } from './util.js';
 
 export const createInvoiceSchema = z.object({
   price_amount: z.union([z.string(), z.number()]).transform((v) => String(v)),
@@ -20,6 +20,7 @@ export const createInvoiceSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   expires_in_minutes: z.number().int().optional(),
   customer_id: z.string().max(128).optional(),
+  fee_paid_by: z.enum(['merchant', 'customer']).optional(),
 });
 
 export const listQuery = z.object({
@@ -65,6 +66,14 @@ export async function payoutsView(merchantId: string | null, status?: string) {
 }
 
 export async function requestPayout(merchantId: string, asset: string) {
+  const { rows } = await pool.query<{ locked_until: Date | null }>(
+    'SELECT locked_until FROM payout_addresses WHERE merchant_id = $1 AND asset = $2',
+    [merchantId, asset.toUpperCase()],
+  );
+  const until = rows[0]?.locked_until;
+  if (until && until > new Date()) {
+    throw httpError(409, 'address_on_hold', `The payout address was changed recently; payouts resume at ${until.toISOString()}`);
+  }
   const payout = await withTx((db) => ledger.createPayout(db, merchantId, asset.toUpperCase(), { respectMinimum: false }));
   return payout ? ledger.serializePayout(payout) : null;
 }

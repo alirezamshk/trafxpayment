@@ -59,7 +59,8 @@ async function publicView(inv: InvoiceRow) {
     cancel_url: s.cancel_url,
     payment_uri: uri,
     qr: uri ? await QRCode.toDataURL(uri, { margin: 1, width: 240 }) : null,
-    assets: inv.asset ? undefined : invoices.availableAssets(),
+    assets: inv.asset ? undefined : await invoices.payableAssets(inv),
+    network_fee: inv.fee_paid_by === 'customer' ? s.network_fee : null,
   };
 }
 

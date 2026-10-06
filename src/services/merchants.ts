@@ -14,13 +14,15 @@ export interface Merchant {
   fee_percent: string;
   settlement_schedule: 'daily' | 'weekly' | 'manual';
   settlement_weekday: number;
+  fee_payer: 'merchant' | 'customer';
+  totp_enabled: boolean;
   last_settled_at: Date | null;
   is_active: boolean;
   created_at: Date;
 }
 
 const MERCHANT_COLS = `id, name, email, webhook_url, webhook_secret, fee_percent, settlement_schedule,
-  settlement_weekday, last_settled_at, is_active, created_at`;
+  settlement_weekday, last_settled_at, is_active, created_at, fee_payer, totp_enabled`;
 
 export function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
@@ -111,24 +113,30 @@ export interface ApiKeyRow {
   id: string;
   label: string;
   key_prefix: string;
+  allowed_ips: string[] | null;
   revoked_at: Date | null;
   last_used_at: Date | null;
   created_at: Date;
 }
 
-export async function createApiKey(db: Queryable, merchantId: string, label = 'default'): Promise<{ key: string; row: ApiKeyRow }> {
+export async function createApiKey(
+  db: Queryable,
+  merchantId: string,
+  label = 'default',
+  allowedIps: string[] | null = null,
+): Promise<{ key: string; row: ApiKeyRow }> {
   const key = `txp_${randomBytes(32).toString('base64url')}`;
   const { rows } = await db.query<ApiKeyRow>(
-    `INSERT INTO api_keys (merchant_id, label, key_hash, key_prefix) VALUES ($1, $2, $3, $4)
-     RETURNING id, label, key_prefix, revoked_at, last_used_at, created_at`,
-    [merchantId, label, sha256(key), key.slice(0, 10)],
+    `INSERT INTO api_keys (merchant_id, label, key_hash, key_prefix, allowed_ips) VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, label, key_prefix, allowed_ips, revoked_at, last_used_at, created_at`,
+    [merchantId, label, sha256(key), key.slice(0, 10), allowedIps],
   );
   return { key, row: rows[0]! };
 }
 
 export async function listApiKeys(db: Queryable, merchantId: string): Promise<ApiKeyRow[]> {
   const { rows } = await db.query<ApiKeyRow>(
-    `SELECT id, label, key_prefix, revoked_at, last_used_at, created_at FROM api_keys
+    `SELECT id, label, key_prefix, allowed_ips, revoked_at, last_used_at, created_at FROM api_keys
      WHERE merchant_id = $1 ORDER BY created_at DESC`,
     [merchantId],
   );
@@ -143,9 +151,12 @@ export async function revokeApiKey(db: Queryable, merchantId: string, keyId: str
   return (r.rowCount ?? 0) > 0;
 }
 
-export async function findMerchantByApiKey(db: Queryable, apiKey: string): Promise<Merchant | undefined> {
-  const { rows } = await db.query<Merchant & { key_id: string }>(
-    `SELECT ${MERCHANT_COLS.split(',').map((c) => 'm.' + c.trim()).join(', ')}, k.id AS key_id
+export async function findMerchantByApiKey(
+  db: Queryable,
+  apiKey: string,
+): Promise<(Merchant & { allowed_ips: string[] | null }) | undefined> {
+  const { rows } = await db.query<Merchant & { key_id: string; allowed_ips: string[] | null }>(
+    `SELECT ${MERCHANT_COLS.split(',').map((c) => 'm.' + c.trim()).join(', ')}, k.id AS key_id, k.allowed_ips
      FROM api_keys k JOIN merchants m ON m.id = k.merchant_id
      WHERE k.key_hash = $1 AND k.revoked_at IS NULL AND m.is_active`,
     [sha256(apiKey)],

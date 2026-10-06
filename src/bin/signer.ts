@@ -2,7 +2,7 @@ import { config } from '../config.js';
 import { registry } from '../context.js';
 import { ledger } from '../services/index.js';
 import { EvmSigner } from '../sweeper/evm.js';
-import { PayoutJob, SweepJob } from '../sweeper/signer.js';
+import { ColdStorageJob, PayoutJob, SweepJob } from '../sweeper/signer.js';
 import { TonSigner } from '../sweeper/ton.js';
 import { TronSigner } from '../sweeper/tron.js';
 import type { ChainSigner } from '../sweeper/types.js';
@@ -37,5 +37,27 @@ for (const chain of Object.values(registry.chains)) {
 }
 for (const s of signers) log.info({ chain: s.chain, hotWallet: s.hotAddress }, 'signer ready');
 
-const stop = runLoops([new SweepJob(signers, registry, ledger.settings, log), new PayoutJob(signers, registry, ledger, log)], log);
+const coldWallets: Record<string, string | undefined> = {
+  tron: config.COLD_WALLET_TRON,
+  ton: config.COLD_WALLET_TON,
+  ethereum: config.COLD_WALLET_EVM,
+  bsc: config.COLD_WALLET_EVM,
+  polygon: config.COLD_WALLET_EVM,
+};
+for (const s of signers) {
+  const cold = coldWallets[s.chain];
+  if (!cold) continue;
+  if (!s.validateAddress(cold)) throw new Error(`Invalid cold wallet address for ${s.chain}: ${cold}`);
+  if (cold.toLowerCase() === s.hotAddress.toLowerCase()) throw new Error(`Cold wallet for ${s.chain} must differ from the hot wallet`);
+  log.info({ chain: s.chain, coldWallet: cold }, 'cold storage enabled');
+}
+
+const stop = runLoops(
+  [
+    new SweepJob(signers, registry, ledger.settings, log),
+    new PayoutJob(signers, registry, ledger, log),
+    new ColdStorageJob(signers, (chain) => coldWallets[chain], registry, ledger.settings, log),
+  ],
+  log,
+);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { stop(); setTimeout(() => process.exit(0), 1000); });

@@ -235,3 +235,68 @@ export class PayoutJob implements Watcher {
     }
   }
 }
+
+/**
+ * Keeps hot wallets small: whatever exceeds an asset's hot_max (plus approved payouts still to be
+ * sent) is transferred to the operator's cold wallet. A transfer is only made when the surplus is
+ * at least 10% of hot_max, so it does not trickle out on every payment.
+ */
+export class ColdStorageJob implements Watcher {
+  readonly name = 'cold-storage';
+  readonly intervalMs = config.COLD_INTERVAL_MS;
+
+  constructor(
+    private readonly signers: ChainSigner[],
+    private readonly coldAddress: (chain: string) => string | undefined,
+    private readonly registry: Registry,
+    private readonly settings: AssetSettingsService,
+    private readonly log: Logger,
+  ) {}
+
+  async tick(): Promise<void> {
+    for (const signer of this.signers) {
+      const cold = this.coldAddress(signer.chain);
+      if (!cold) continue;
+      for (const asset of this.registry.assets.filter((a) => a.chain === signer.chain)) {
+        try {
+          await this.move(signer, asset, cold);
+        } catch (err) {
+          this.log.error({ chain: signer.chain, asset: asset.id, err: (err as Error).message }, 'cold transfer failed');
+        }
+      }
+    }
+  }
+
+  private async move(signer: ChainSigner, asset: AssetDef, cold: string): Promise<void> {
+    // Resolve the previous transfer first; never stack transfers.
+    const { rows: open } = await pool.query<{ id: string; tx_hash: string; created_at: Date }>(
+      `SELECT id, tx_hash, created_at FROM sweeps WHERE chain = $1 AND asset = $2 AND kind = 'to_cold' AND status = 'sent'`,
+      [signer.chain, asset.id],
+    );
+    for (const s of open) {
+      const state = await signer.txState(s.tx_hash);
+      if (state === 'pending' || (state === 'unknown' && Date.now() - s.created_at.getTime() < STUCK_MS)) return;
+      await pool.query(`UPDATE sweeps SET status = $2 WHERE id = $1`, [s.id, state === 'success' ? 'confirmed' : 'failed']);
+    }
+
+    const balance = await signer.hotBalance(asset);
+    if (balance === null) return;
+    const { hotMax } = await this.settings.get(pool, asset.id);
+    const { rows } = await pool.query<{ total: string }>(
+      `SELECT COALESCE(SUM(amount + fee), 0) AS total FROM payouts
+       WHERE chain = $1 AND asset = $2 AND status IN ('pending_approval', 'approved', 'sending')`,
+      [signer.chain, asset.id],
+    );
+    const keep = hotMax + BigInt(rows[0]!.total);
+    const surplus = balance - keep;
+    if (surplus <= 0n || surplus < hotMax / 10n) return;
+
+    const tx = await signer.preparePayout(asset, cold, surplus);
+    await pool.query(
+      `INSERT INTO sweeps (chain, address, asset, kind, tx_hash, amount) VALUES ($1, $2, $3, 'to_cold', $4, $5)`,
+      [signer.chain, signer.hotAddress, asset.id, tx.hash, surplus.toString()],
+    );
+    await tx.broadcast();
+    this.log.info({ chain: signer.chain, asset: asset.id, amount: surplus.toString(), tx: tx.hash }, 'surplus moved to cold wallet');
+  }
+}

@@ -75,6 +75,8 @@ const schema = z.object({
   SETTLEMENT_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(6),
   PAYOUT_REQUIRE_APPROVAL: boolWithDefault(true),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(12),
+  // A changed payout address receives no payouts for this long (protects against account takeover).
+  PAYOUT_ADDRESS_HOLD_HOURS: z.coerce.number().nonnegative().default(24),
   ALLOW_MERCHANT_SIGNUP: bool,
 
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().positive().default(12),
@@ -82,6 +84,11 @@ const schema = z.object({
 
   // Signer only (sweeper + payout sender). Keep these OFF the API/worker hosts.
   SIGNER_MNEMONIC: optionalString,
+  // Cold wallets: hot-wallet balance above each asset's hot_max is moved here (unset = disabled).
+  COLD_WALLET_EVM: optionalString,
+  COLD_WALLET_TRON: optionalString,
+  COLD_WALLET_TON: optionalString,
+  COLD_INTERVAL_MS: z.coerce.number().default(10 * 60_000),
   SWEEP_INTERVAL_MS: z.coerce.number().default(60000),
   TRON_SWEEP_TRX_TOPUP: z.coerce.number().default(30),
   TRON_SWEEP_FEE_LIMIT_TRX: z.coerce.number().default(50),

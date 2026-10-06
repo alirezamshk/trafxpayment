@@ -29,6 +29,8 @@ export interface InvoiceRow {
   status: InvoiceStatus;
   customer_id: string | null;
   deposit_address_id: string | null;
+  network_fee: string;
+  fee_paid_by: 'merchant' | 'customer' | null;
   fee_percent: string | null;
   fee_amount: string;
   is_late: boolean;
@@ -88,6 +90,18 @@ export interface CreateInvoiceInput {
   expires_in_minutes?: number;
   /** Merchant's own user id: that user always gets the same deposit address. */
   customer_id?: string;
+  /** Who pays the deposit network fee; defaults to the merchant's setting. */
+  fee_paid_by?: 'merchant' | 'customer';
+}
+
+interface Quote {
+  rate: string;
+  /** Price converted to the asset, before any network fee. */
+  amount: bigint;
+  networkFee: bigint;
+  feePaidBy: 'merchant' | 'customer';
+  /** What the customer must send. */
+  payAmount: bigint;
 }
 
 export class InvoiceError extends Error {
@@ -170,7 +184,9 @@ export class InvoiceService {
     }
 
     // Quote before opening the DB transaction so a slow price API never holds locks.
-    const quote = asset ? await this.quote(asset, price, currency) : undefined;
+    const feePaidBy = input.fee_paid_by ?? null;
+    if (feePaidBy && !['merchant', 'customer'].includes(feePaidBy)) throw new InvoiceError("fee_paid_by must be 'merchant' or 'customer'");
+    const quote = asset ? await this.quote(asset, price, currency, merchantId, feePaidBy) : undefined;
     const ttl = input.expires_in_minutes ?? this.defaultTtlMinutes;
     if (ttl < 5 || ttl > 7 * 24 * 60) throw new InvoiceError('expires_in_minutes must be between 5 and 10080');
 
@@ -186,8 +202,8 @@ export class InvoiceService {
       }
       const { rows } = await db.query<InvoiceRow>(
         `INSERT INTO invoices (merchant_id, order_id, description, price_amount, price_currency,
-                               success_url, cancel_url, metadata, expires_at, customer_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9), $10)
+                               success_url, cancel_url, metadata, expires_at, customer_id, fee_paid_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9), $10, $11)
          RETURNING *`,
         [
           merchantId,
@@ -200,6 +216,7 @@ export class InvoiceService {
           JSON.stringify(input.metadata ?? {}),
           ttl,
           customerId,
+          feePaidBy,
         ],
       );
       let invoice = rows[0]!;
@@ -220,7 +237,7 @@ export class InvoiceService {
     if (current.status !== 'pending' || current.expires_at < new Date()) {
       throw new InvoiceError('Invoice is no longer payable', 409, 'not_payable');
     }
-    const quote = await this.quote(asset, current.price_amount, current.price_currency);
+    const quote = await this.quote(asset, current.price_amount, current.price_currency, current.merchant_id, current.fee_paid_by);
     return withTx(async (db) => {
       const { rows } = await db.query<InvoiceRow>('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [invoiceId]);
       const inv = rows[0]!;
@@ -232,7 +249,56 @@ export class InvoiceService {
     });
   }
 
-  private async quote(asset: AssetDef, price: string, currency: string): Promise<{ rate: string; amount: bigint }> {
+  /**
+   * Converts the invoice price into `asset`, enforces the asset's minimum and applies the deposit
+   * network fee: added to what the customer pays when the customer pays it, otherwise only deducted
+   * from the merchant's credit later.
+   */
+  private async quote(
+    asset: AssetDef,
+    price: string,
+    currency: string,
+    merchantId: string,
+    feePaidBy: 'merchant' | 'customer' | null,
+  ): Promise<Quote> {
+    const { rate, amount } = await this.convert(asset, price, currency);
+    const settings = await this.deps.ledger.settings.get(pool, asset.id);
+    if (amount < settings.minAmount) {
+      throw new InvoiceError(
+        `The minimum for ${asset.symbol} on ${this.deps.registry.chains[asset.chain].name} is ${fromBaseUnits(settings.minAmount, asset.decimals)} ${asset.symbol}; choose another network`,
+        400,
+        'below_minimum',
+      );
+    }
+    let payer = feePaidBy;
+    if (!payer) {
+      const { rows } = await pool.query<{ fee_payer: 'merchant' | 'customer' }>('SELECT fee_payer FROM merchants WHERE id = $1', [merchantId]);
+      payer = rows[0]?.fee_payer ?? 'merchant';
+    }
+    const networkFee = settings.depositFee;
+    return { rate, amount, networkFee, feePaidBy: payer, payAmount: payer === 'customer' ? amount + networkFee : amount };
+  }
+
+  /**
+   * Assets the payer may pick for an unassigned invoice: enabled ones whose converted amount meets
+   * the minimum, with the amount that would be due. Assets whose rate is unavailable are listed without one.
+   */
+  async payableAssets(inv: InvoiceRow) {
+    const out = [];
+    for (const a of this.availableAssets()) {
+      const asset = this.asset(a.id);
+      try {
+        const q = await this.quote(asset, inv.price_amount, inv.price_currency, inv.merchant_id, inv.fee_paid_by);
+        out.push({ ...a, pay_amount: fromBaseUnits(q.payAmount, asset.decimals) });
+      } catch (err) {
+        if ((err as InvoiceError).code === 'below_minimum') continue;
+        out.push({ ...a, pay_amount: null });
+      }
+    }
+    return out;
+  }
+
+  private async convert(asset: AssetDef, price: string, currency: string): Promise<{ rate: string; amount: bigint }> {
     let rate: string;
     try {
       rate = await this.deps.rates.rate(asset, currency);
@@ -248,7 +314,7 @@ export class InvoiceService {
     db: pg.PoolClient,
     invoice: InvoiceRow,
     asset: AssetDef,
-    quote: { rate: string; amount: bigint },
+    quote: Quote,
   ): Promise<InvoiceRow> {
     const chain = this.deps.registry.chains[asset.chain];
     let address: string;
@@ -269,9 +335,21 @@ export class InvoiceService {
 
     const { rows } = await db.query<InvoiceRow>(
       `UPDATE invoices SET asset = $2, chain = $3, address = $4, memo = $5, derivation_index = $6,
-              pay_amount = $7, rate = $8, deposit_address_id = $9, updated_at = now()
+              pay_amount = $7, rate = $8, deposit_address_id = $9, network_fee = $10, fee_paid_by = $11, updated_at = now()
        WHERE id = $1 RETURNING *`,
-      [invoice.id, asset.id, asset.chain, address, memo, index, quote.amount.toString(), quote.rate, addressId],
+      [
+        invoice.id,
+        asset.id,
+        asset.chain,
+        address,
+        memo,
+        index,
+        quote.payAmount.toString(),
+        quote.rate,
+        addressId,
+        quote.networkFee.toString(),
+        quote.feePaidBy,
+      ],
     );
     return rows[0]!;
   }
@@ -596,7 +674,12 @@ export class InvoiceService {
       amount_pending: fmt(inv.amount_pending),
       rate: inv.rate && trimDecimal(inv.rate),
       fee_amount: fmt(inv.fee_amount),
-      net_amount: inv.status === 'paid' && asset ? fromBaseUnits(BigInt(inv.amount_received) - BigInt(inv.fee_amount), asset.decimals) : null,
+      network_fee: fmt(inv.network_fee),
+      fee_paid_by: inv.fee_paid_by,
+      net_amount:
+        inv.status === 'paid' && asset
+          ? fromBaseUnits(BigInt(inv.amount_received) - BigInt(inv.fee_amount) - BigInt(inv.network_fee), asset.decimals)
+          : null,
       is_late: inv.is_late,
       payment_url: `${this.publicBaseUrl}/pay/${inv.id}`,
       success_url: inv.success_url,

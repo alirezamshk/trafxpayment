@@ -73,13 +73,14 @@ export class LedgerService {
   }
 
   /**
-   * Credits a paid invoice to the merchant (gross payment minus platform fee). Idempotent: only the
+   * Credits a paid invoice to the merchant: gross payment, minus the deposit network fee (first, up to
+   * the invoice's network_fee), minus the platform percentage on the rest. Idempotent: only the
    * not-yet-credited part of amount_received is booked, so late top-ups after `paid` are credited too.
    * Must run inside the transaction holding the invoice row lock.
    */
   async creditInvoice(
     db: pg.PoolClient,
-    inv: { id: string; merchant_id: string; asset: string | null; amount_received: string },
+    inv: { id: string; merchant_id: string; asset: string | null; amount_received: string; network_fee?: string },
   ): Promise<bigint> {
     if (!inv.asset) return 0n;
     const { rows } = await db.query<{ credited: string }>(
@@ -91,12 +92,24 @@ export class LedgerService {
 
     const { rows: m } = await db.query<{ fee_percent: string }>('SELECT fee_percent FROM merchants WHERE id = $1', [inv.merchant_id]);
     const feePercent = m[0]!.fee_percent;
-    const fee = computeFee(delta, feePercent);
+    const { rows: nf } = await db.query<{ charged: string }>(
+      `SELECT COALESCE(-SUM(amount), 0) AS charged FROM ledger_entries WHERE invoice_id = $1 AND type = 'network_fee'`,
+      [inv.id],
+    );
+    const nfDue = BigInt(inv.network_fee ?? '0') - BigInt(nf[0]!.charged);
+    const networkFee = nfDue <= 0n ? 0n : nfDue < delta ? nfDue : delta;
+    const fee = computeFee(delta - networkFee, feePercent);
 
     await db.query(
       `INSERT INTO ledger_entries (merchant_id, asset, amount, type, invoice_id) VALUES ($1, $2, $3, 'payment', $4)`,
       [inv.merchant_id, inv.asset, delta.toString(), inv.id],
     );
+    if (networkFee > 0n) {
+      await db.query(
+        `INSERT INTO ledger_entries (merchant_id, asset, amount, type, invoice_id) VALUES ($1, $2, $3, 'network_fee', $4)`,
+        [inv.merchant_id, inv.asset, (-networkFee).toString(), inv.id],
+      );
+    }
     if (fee > 0n) {
       await db.query(
         `INSERT INTO ledger_entries (merchant_id, asset, amount, type, invoice_id, note) VALUES ($1, $2, $3, 'fee', $4, $5)`,
@@ -107,7 +120,7 @@ export class LedgerService {
       `UPDATE invoices SET fee_amount = fee_amount + $2, fee_percent = $3 WHERE id = $1`,
       [inv.id, fee.toString(), feePercent],
     );
-    return delta - fee;
+    return delta - fee - networkFee;
   }
 
   async balances(db: Queryable, merchantId: string): Promise<{ asset: string; balance: bigint }[]> {
@@ -119,8 +132,16 @@ export class LedgerService {
   }
 
   async platformSummary(db: Queryable) {
-    const { rows } = await db.query<{ asset: string; fees: string; payout_fees: string; merchant_balances: string; volume: string }>(
+    const { rows } = await db.query<{
+      asset: string;
+      fees: string;
+      network_fees: string;
+      payout_fees: string;
+      merchant_balances: string;
+      volume: string;
+    }>(
       `SELECT asset,
+              -COALESCE(SUM(amount) FILTER (WHERE type = 'network_fee'), 0) AS network_fees,
               -COALESCE(SUM(amount) FILTER (WHERE type = 'fee'), 0) AS fees,
               -COALESCE(SUM(amount) FILTER (WHERE type = 'payout_fee'), 0)
                 - COALESCE(SUM(amount) FILTER (WHERE type = 'payout_reversal' AND note LIKE 'fee:%'), 0) AS payout_fees,
@@ -152,11 +173,12 @@ export class LedgerService {
     if (!def) throw new Error(`Unknown asset ${asset}`);
     // Serialize payouts per merchant.
     await db.query('SELECT id FROM merchants WHERE id = $1 FOR UPDATE', [merchantId]);
-    const { rows: addr } = await db.query<{ address: string; min_amount: string }>(
-      'SELECT address, min_amount FROM payout_addresses WHERE merchant_id = $1 AND asset = $2',
+    const { rows: addr } = await db.query<{ address: string; min_amount: string; held: boolean }>(
+      `SELECT address, min_amount, COALESCE(locked_until > now(), false) AS held
+       FROM payout_addresses WHERE merchant_id = $1 AND asset = $2`,
       [merchantId, asset],
     );
-    if (!addr[0]) return null;
+    if (!addr[0] || addr[0].held) return null; // recently changed address: wait for the hold to end
     const { rows: bal } = await db.query<{ balance: string }>(
       `SELECT COALESCE(SUM(amount), 0) AS balance FROM ledger_entries WHERE merchant_id = $1 AND asset = $2`,
       [merchantId, asset],

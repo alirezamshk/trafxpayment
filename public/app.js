@@ -2,8 +2,10 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-async function api(method, path, body) {
+// Calls the JSON API. When the server asks for a two-factor code, prompts for it and retries once.
+async function api(method, path, body, otp) {
   const opts = { method, headers: {}, credentials: 'same-origin' };
+  if (otp) opts.headers['x-otp'] = otp;
   if (body !== undefined) {
     opts.headers['content-type'] = 'application/json';
     opts.body = JSON.stringify(body);
@@ -14,8 +16,14 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    const code = data?.error?.code;
+    if ((code === 'otp_required' || code === 'otp_invalid') && !otp) {
+      const entered = prompt(code === 'otp_invalid' ? 'کد نادرست بود. کد ۶ رقمی Google Authenticator:' : 'کد ۶ رقمی Google Authenticator را وارد کنید:');
+      if (entered) return api(method, path, body, entered.trim());
+    }
     const err = new Error(data?.error?.message || `HTTP ${res.status}`);
     err.status = res.status;
+    err.code = code;
     throw err;
   }
   return data;

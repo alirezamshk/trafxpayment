@@ -5,7 +5,9 @@ import { findAsset } from '../chains/assets.js';
 import { fromBaseUnits, toBaseUnits } from '../lib/amount.js';
 import { invoices, ledger } from '../services/index.js';
 import { createApiKey, createMerchant, getMerchant, listMerchants } from '../services/merchants.js';
+import { audit, auditList } from '../services/audit.js';
 import { requireAdminSession } from './auth.js';
+import { otpFromRequest, requireOtp, resetTwoFactor, twoFactorRoutes } from './twofactor.js';
 import { balancesView, listInvoices, listQuery, payoutsView } from './merchant-api.js';
 import { merchantView, payoutAddressesView } from './panel.js';
 import { httpError, parse } from './util.js';
@@ -18,6 +20,39 @@ const fmt = (asset: string, v: string) => {
 /** Platform operator API (cookie session, role=admin). */
 export async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdminSession);
+  await app.register(twoFactorRoutes('admin', (req) => req.adminId!));
+
+  // With 2FA enabled every admin change needs a fresh code, and every successful change is audited.
+  const isMutation = (method: string, url: string) => method !== 'GET' && !url.includes('/2fa');
+  app.addHook('preHandler', async (req) => {
+    if (req.adminId && isMutation(req.method, req.url)) await requireOtp('admin', req.adminId, otpFromRequest(req));
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    if (!req.adminId || !isMutation(req.method, req.url) || reply.statusCode >= 400) return;
+    const { password: _p, ...body } = (req.body ?? {}) as Record<string, unknown>;
+    const params = req.params as Record<string, string>;
+    await audit(pool, {
+      actorType: 'admin',
+      actorId: req.adminId,
+      merchantId: params.id && req.url.includes('/merchants/') ? params.id : null,
+      action: `admin ${req.method} ${req.routeOptions.url ?? req.url}`,
+      details: { params, body },
+      ip: req.ip,
+    }).catch((err) => req.log.error(err));
+  });
+
+  app.get('/audit', async (req) => {
+    const q = parse(z.object({ merchant_id: z.string().uuid().optional() }), req.query);
+    return { data: await auditList(pool, { merchantId: q.merchant_id, limit: 300 }) };
+  });
+  app.get('/me', async (req) => {
+    const { rows } = await pool.query<{ email: string; totp_enabled: boolean }>('SELECT email, totp_enabled FROM admins WHERE id = $1', [req.adminId]);
+    return rows[0];
+  });
+  app.post<{ Params: { id: string } }>('/merchants/:id/reset-2fa', async (req) => {
+    await resetTwoFactor('merchant', req.params.id);
+    return { ok: true };
+  });
 
   app.get('/summary', async () => {
     const totals = await ledger.platformSummary(pool);
@@ -31,6 +66,7 @@ export async function adminRoutes(app: FastifyInstance) {
         asset: t.asset,
         platform_fees: fmt(t.asset, t.fees),
         payout_fees: fmt(t.asset, t.payout_fees),
+        network_fees: fmt(t.asset, t.network_fees),
         merchant_balances: fmt(t.asset, t.merchant_balances),
         volume: fmt(t.asset, t.volume),
       })),
@@ -46,19 +82,26 @@ export async function adminRoutes(app: FastifyInstance) {
     data: await ledger.settings.view(pool, invoices.availableAssets().map((a) => a.id)),
   }));
   app.put('/asset-settings', async (req) => {
+    const dec = z.string().trim().regex(/^\d+(\.\d+)?$/);
     const b = parse(
-      z.object({ asset: z.string(), sweep_threshold: z.string().regex(/^\d+(\.\d+)?$/), payout_fee: z.string().regex(/^\d+(\.\d+)?$/) }),
+      z.object({ asset: z.string(), sweep_threshold: dec, payout_fee: dec, min_amount: dec, deposit_fee: dec, hot_max: dec }),
       req.body,
     );
     const asset = invoices.asset(b.asset);
-    let threshold: bigint, fee: bigint;
-    try {
-      threshold = toBaseUnits(b.sweep_threshold, asset.decimals);
-      fee = toBaseUnits(b.payout_fee, asset.decimals);
-    } catch (e) {
-      throw httpError(400, 'invalid_amount', (e as Error).message);
-    }
-    await ledger.settings.set(pool, asset.id, threshold, fee);
+    const u = (v: string) => {
+      try {
+        return toBaseUnits(v, asset.decimals);
+      } catch (e) {
+        throw httpError(400, 'invalid_amount', (e as Error).message);
+      }
+    };
+    await ledger.settings.set(pool, asset.id, {
+      sweepThreshold: u(b.sweep_threshold),
+      payoutFee: u(b.payout_fee),
+      minAmount: u(b.min_amount),
+      depositFee: u(b.deposit_fee),
+      hotMax: u(b.hot_max),
+    });
     return { ok: true };
   });
 

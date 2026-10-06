@@ -133,21 +133,21 @@ const VIEWS = {
 
   async assets() {
     const r = await api('GET', '/api/admin/asset-settings');
+    const F = [['min_amount', 'حداقل مبلغ فاکتور'], ['deposit_fee', 'کارمزد شبکه واریز'], ['sweep_threshold', 'حد sweep'], ['payout_fee', 'کارمزد شبکه تسویه'], ['hot_max', 'سقف کیف داغ']];
     view().innerHTML = `<div class="card"><h2>تنظیمات ارزها</h2>
-      <p class="muted small"><b>حد sweep:</b> پول روی آدرس‌های واریز جمع می‌ماند تا به این مقدار برسد و بعد یک‌جا به کیف داغ منتقل می‌شود (۰ = فوری). برای USDT-TRC20 که هر انتقال چند دلار هزینه دارد، حد بالاتر یعنی هزینه کمتر. اگر برای تسویه‌ای پول کافی در کیف داغ نباشد، آدرس‌ها زودتر sweep می‌شوند.<br>
-      <b>کارمزد شبکه تسویه:</b> مبلغی که از هر تسویه پذیرنده بابت هزینه انتقال کسر می‌شود.</p>
-      ${table(['ارز', 'حد sweep', 'کارمزد شبکه تسویه', ''], r.data.map((a) => [
-        esc(a.asset),
-        `<input class="ltr" style="max-width:140px" data-sweep="${esc(a.asset)}" value="${esc(a.sweep_threshold)}">`,
-        `<input class="ltr" style="max-width:140px" data-fee="${esc(a.asset)}" value="${esc(a.payout_fee)}">`,
+      <p class="muted small">
+      <b>حداقل مبلغ فاکتور:</b> فاکتورهای کوچک‌تر این شبکه را نمی‌بینند. <b>کارمزد شبکه واریز:</b> از هر پرداخت؛ بسته به تنظیم پذیرنده به مبلغ مشتری اضافه یا از سهم پذیرنده کم می‌شود.
+      <b>حد sweep:</b> انتقال یک‌جای پول آدرس‌ها به کیف داغ بعد از رسیدن به این مقدار. <b>کارمزد شبکه تسویه:</b> از هر تسویه پذیرنده. <b>سقف کیف داغ:</b> مازاد به کیف سرد منتقل می‌شود.</p>
+      ${table(['ارز', ...F.map((f) => f[1]), ''], r.data.map((a) => [esc(a.asset),
+        ...F.map(([k]) => `<input class="ltr" style="max-width:110px" data-k="${k}" data-a="${esc(a.asset)}" value="${esc(a[k])}">`),
         `<button class="small" data-save="${esc(a.asset)}">ذخیره</button>`]))}
       <div id="asMsg"></div></div>`;
     view().querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
       const a = b.dataset.save;
-      try {
-        await api('PUT', '/api/admin/asset-settings', { asset: a, sweep_threshold: $(`[data-sweep="${a}"]`).value.trim(), payout_fee: $(`[data-fee="${a}"]`).value.trim() });
-        showMsg($('#asMsg'), `${a} ذخیره شد`, 'ok');
-      } catch (e) { showMsg($('#asMsg'), e.message); }
+      const body = { asset: a };
+      view().querySelectorAll(`[data-a="${a}"]`).forEach((i) => (body[i.dataset.k] = i.value.trim()));
+      try { await api('PUT', '/api/admin/asset-settings', body); showMsg($('#asMsg'), `${a} ذخیره شد`, 'ok'); }
+      catch (e) { showMsg($('#asMsg'), e.message); }
     }));
   },
 
