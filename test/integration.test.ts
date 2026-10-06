@@ -373,3 +373,39 @@ describe('sweep threshold and liquidity', () => {
     expect(swept).toEqual([]);
   });
 });
+
+describe('concurrency', () => {
+  it('100 customers paying the same amount at the same time are each credited exactly once', async () => {
+    const m = await merchant(1);
+    const N = 100;
+    // 100 invoices created concurrently (half with customer ids, half from the pool), all for 4 USDT.
+    const created = await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        invoices.create(m.id, { price_amount: '4', price_currency: 'USD', asset: 'USDT_TRC20', ...(i % 2 ? { customer_id: `user-${i}` } : {}) }),
+      ),
+    );
+    expect(new Set(created.map((c) => c.address)).size).toBe(N); // every invoice got its own address
+    expect(new Set(created.map((c) => c.derivation_index)).size).toBe(N);
+
+    // Identical 4 USDT deposits all arrive at once; each one is also delivered twice (watcher retries).
+    const deposit = (inv: (typeof created)[number], i: number) =>
+      invoices.recordDeposit({ invoiceId: inv.id, chain: 'tron', asset: 'USDT_TRC20', txHash: `tx-${i}`, eventIndex: '0', from: `TPayer${i}`, to: inv.address!, amount: 4_000_000n, confirmed: true });
+    await Promise.all([...created.map(deposit), ...created.map(deposit)]);
+
+    const { rows } = await pool.query<{ status: string; amount_received: string; n: string }>(
+      `SELECT i.status, i.amount_received, (SELECT COUNT(*) FROM deposits d WHERE d.invoice_id = i.id) AS n
+       FROM invoices i WHERE merchant_id = $1`,
+      [m.id],
+    );
+    expect(rows).toHaveLength(N);
+    for (const r of rows) {
+      expect(r.status).toBe('paid');
+      expect(r.amount_received).toBe('4000000');
+      expect(r.n).toBe('1');
+    }
+    // Ledger: 100 × 4 USDT minus 1% = 396 USDT, credited exactly once.
+    expect((await ledger.balances(pool, m.id))[0]!.balance).toBe(396_000_000n);
+    const { rows: wh } = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE merchant_id = $1 AND event = 'invoice.paid'`, [m.id]);
+    expect(wh[0]!.n).toBe(String(N));
+  }, 60000);
+});
