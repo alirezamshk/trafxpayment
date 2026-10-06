@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>پنل پذیرنده</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="wrap">
+  <div id="login" class="card narrow hidden" style="margin:40px auto">
+    <h1>ورود به پنل پذیرنده</h1>
+    <form id="loginForm">
+      <label>ایمیل</label><input name="email" type="email" class="ltr" required autocomplete="username">
+      <label>رمز عبور</label><input name="password" type="password" class="ltr" required autocomplete="current-password">
+      <div id="loginMsg"></div>
+      <p><button>ورود</button></p>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="topbar"><h1 id="title">پنل پذیرنده</h1><button class="secondary small" id="logout">خروج</button></div>
+    <nav class="tabs" id="tabs"></nav>
+    <div id="view"></div>
+  </div>
+</div>
+<script src="/assets/app.js"></script>
+<script>
+let me;
+const view = () => $('#view');
+
+async function boot() {
+  try {
+    me = await api('GET', '/api/panel/me');
+  } catch (e) {
+    $('#login').classList.remove('hidden');
+    $('#app').classList.add('hidden');
+    return;
+  }
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  $('#title').textContent = me.merchant.name;
+  tabs($('#tabs'), [
+    ['dash', 'داشبورد'], ['invoices', 'فاکتورها'], ['payouts', 'تسویه‌ها'],
+    ['addresses', 'آدرس‌های تسویه'], ['keys', 'کلیدهای API'], ['settings', 'تنظیمات'], ['docs', 'راهنمای اتصال'],
+  ], (t) => VIEWS[t]().catch((e) => showMsg(view(), e.message)));
+}
+
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await api('POST', '/api/auth/login', { ...formData(e.target), role: 'merchant' }); boot(); }
+  catch (err) { showMsg($('#loginMsg'), err.message); }
+});
+$('#logout').addEventListener('click', async () => { await api('POST', '/api/auth/logout'); location.reload(); });
+
+const assetOptions = () => me.assets.map((a) => `<option value="${esc(a.id)}">${esc(a.symbol)} — ${esc(a.network_name)}</option>`).join('');
+
+const VIEWS = {
+  async dash() {
+    const [b, inv] = await Promise.all([api('GET', '/api/panel/balances'), api('GET', '/api/panel/invoices?limit=10')]);
+    const m = me.merchant;
+    view().innerHTML = `
+      <div class="card"><h2>موجودی قابل تسویه</h2>
+        <div class="grid">${b.data.length ? b.data.map((x) => `<div class="stat"><span class="muted">${esc(x.asset)}</span><b>${esc(x.balance)}</b></div>`).join('') : '<p class="muted">هنوز موجودی ندارید.</p>'}</div>
+        <p class="muted small">کارمزد شما: <b>${esc(m.fee_percent)}٪</b> — زمان‌بندی تسویه: <b>${SCHEDULE_FA[m.settlement_schedule]}${m.settlement_schedule === 'weekly' ? ' (' + WEEKDAYS_FA[m.settlement_weekday] + ')' : ''}</b> ساعت ${me.settlement_hour_utc}:00 UTC — آخرین تسویه: ${fmtDate(m.last_settled_at)}</p>
+      </div>
+      <div class="card"><h2>آخرین فاکتورها</h2>${invoiceTable(inv.data)}</div>`;
+  },
+
+  async invoices() {
+    const inv = await api('GET', '/api/panel/invoices?limit=100');
+    view().innerHTML = `
+      <div class="card"><h2>ساخت لینک پرداخت</h2>
+        <form id="newInv" class="grid">
+          <div><label>مبلغ</label><input name="price_amount" class="ltr" required placeholder="10.5"></div>
+          <div><label>واحد</label><input name="price_currency" class="ltr" value="USD"></div>
+          <div><label>ارز پرداخت (اختیاری)</label><select name="asset"><option value="">انتخاب توسط مشتری</option>${assetOptions()}</select></div>
+          <div><label>توضیحات</label><input name="description"></div>
+          <div style="align-self:end"><button>ساخت فاکتور</button></div>
+        </form><div id="invMsg"></div>
+      </div>
+      <div class="card"><h2>فاکتورها</h2>${invoiceTable(inv.data)}</div>`;
+    $('#newInv').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const d = formData(e.target);
+      if (!d.asset) delete d.asset;
+      if (!d.description) delete d.description;
+      try {
+        const r = await api('POST', '/api/panel/invoices', d);
+        $('#invMsg').innerHTML = `<div class="alert ok">فاکتور ساخته شد:</div>${copyBox(r.payment_url)}`;
+      } catch (err) { showMsg($('#invMsg'), err.message); }
+    });
+  },
+
+  async payouts() {
+    const [p, b] = await Promise.all([api('GET', '/api/panel/payouts'), api('GET', '/api/panel/balances')]);
+    view().innerHTML = `
+      <div class="card"><h2>درخواست تسویه فوری</h2>
+        <form id="reqPayout" class="row"><select name="asset" style="max-width:260px">${b.data.map((x) => `<option value="${esc(x.asset)}">${esc(x.asset)} — ${esc(x.balance)}</option>`).join('')}</select><button>درخواست</button></form>
+        <div id="pMsg"></div>
+      </div>
+      <div class="card"><h2>تاریخچه تسویه</h2>${table(['تاریخ', 'ارز', 'مبلغ', 'آدرس', 'وضعیت', 'تراکنش'],
+        p.data.map((x) => [fmtDate(x.created_at), esc(x.asset), `<span class="mono">${esc(x.amount)}</span>`, `<span class="mono">${esc(short(x.address))}</span>`, badge(x.status), x.tx_hash ? `<span class="mono">${esc(short(x.tx_hash))}</span>` : '—']))}</div>
+      <div class="card"><h2>گردش حساب</h2><div id="ledger"></div></div>`;
+    $('#reqPayout').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await api('POST', '/api/panel/payouts', formData(e.target)); VIEWS.payouts(); }
+      catch (err) { showMsg($('#pMsg'), err.message); }
+    });
+    const l = await api('GET', '/api/panel/ledger');
+    $('#ledger').innerHTML = table(['تاریخ', 'نوع', 'ارز', 'مبلغ', 'توضیح'],
+      l.data.map((x) => [fmtDate(x.created_at), LEDGER_FA[x.type] || esc(x.type), esc(x.asset), `<span class="mono">${esc(x.amount)}</span>`, esc(x.note || (x.invoice_id ? short(x.invoice_id, 4) : ''))]));
+  },
+
+  async addresses() {
+    const a = await api('GET', '/api/panel/payout-addresses');
+    view().innerHTML = `
+      <div class="card"><h2>آدرس کیف پول برای تسویه</h2>
+        <p class="muted small">موجودی هر ارز طبق زمان‌بندی به آدرس همان ارز واریز می‌شود. اگر موجودی کمتر از «حداقل» باشد به دوره بعد منتقل می‌شود.</p>
+        <form id="addrForm" class="grid">
+          <div><label>ارز</label><select name="asset">${assetOptions()}</select></div>
+          <div style="grid-column:span 2"><label>آدرس</label><input name="address" class="ltr" required></div>
+          <div><label>حداقل مبلغ تسویه</label><input name="min_amount" class="ltr" value="0"></div>
+          <div style="align-self:end"><button>ذخیره</button></div>
+        </form><div id="aMsg"></div>
+      </div>
+      <div class="card">${table(['ارز', 'آدرس', 'حداقل', ''], a.data.map((x) => [esc(x.asset), `<span class="mono">${esc(x.address)}</span>`, `<span class="mono">${esc(x.min_amount)}</span>`, `<button class="small danger" data-del="${esc(x.asset)}">حذف</button>`]))}</div>`;
+    $('#addrForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await api('PUT', '/api/panel/payout-addresses', formData(e.target)); VIEWS.addresses(); }
+      catch (err) { showMsg($('#aMsg'), err.message); }
+    });
+    view().querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (confirm('حذف شود؟')) { await api('DELETE', `/api/panel/payout-addresses/${b.dataset.del}`); VIEWS.addresses(); }
+    }));
+  },
+
+  async keys() {
+    const k = await api('GET', '/api/panel/api-keys');
+    view().innerHTML = `
+      <div class="card"><h2>کلیدهای API</h2>
+        <form id="keyForm" class="row"><input name="label" placeholder="نام کلید (مثلاً سایت اصلی)" style="max-width:300px"><button>ساخت کلید جدید</button></form>
+        <div id="kMsg"></div>
+        ${table(['نام', 'پیشوند', 'ساخت', 'آخرین استفاده', 'وضعیت', ''], k.data.map((x) => [esc(x.label), `<span class="mono">${esc(x.key_prefix)}…</span>`, fmtDate(x.created_at), fmtDate(x.last_used_at),
+          x.revoked_at ? '<span class="badge s-cancelled">باطل شده</span>' : '<span class="badge s-paid">فعال</span>',
+          x.revoked_at ? '' : `<button class="small danger" data-revoke="${esc(x.id)}">ابطال</button>`]))}
+      </div>`;
+    $('#keyForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const r = await api('POST', '/api/panel/api-keys', { label: formData(e.target).label || 'default' });
+      await VIEWS.keys();
+      $('#kMsg').innerHTML = `<div class="alert warn">این کلید فقط همین یک بار نمایش داده می‌شود؛ آن را در جای امن ذخیره کنید:</div>${copyBox(r.key)}`;
+    });
+    view().querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
+      if (confirm('این کلید باطل شود؟ سایت‌هایی که از آن استفاده می‌کنند قطع می‌شوند.')) { await api('DELETE', `/api/panel/api-keys/${b.dataset.revoke}`); VIEWS.keys(); }
+    }));
+  },
+
+  async settings() {
+    const m = (await api('GET', '/api/panel/me')).merchant;
+    view().innerHTML = `
+      <div class="card"><h2>تنظیمات</h2>
+        <form id="setForm" class="grid">
+          <div><label>نام فروشگاه</label><input name="name" value="${esc(m.name)}"></div>
+          <div style="grid-column:span 2"><label>آدرس Webhook</label><input name="webhook_url" class="ltr" value="${esc(m.webhook_url || '')}" placeholder="https://example.com/payment/callback"></div>
+          <div><label>زمان‌بندی تسویه</label><select name="settlement_schedule">${Object.entries(SCHEDULE_FA).map(([k, v]) => `<option value="${k}" ${k === m.settlement_schedule ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+          <div><label>روز تسویه هفتگی</label><select name="settlement_weekday">${WEEKDAYS_FA.map((d, i) => `<option value="${i}" ${i === m.settlement_weekday ? 'selected' : ''}>${d}</option>`).join('')}</select></div>
+          <div style="align-self:end"><button>ذخیره</button></div>
+        </form><div id="sMsg"></div>
+      </div>
+      <div class="card"><h2>کلید امضای Webhook</h2><div id="secret"><button class="secondary" id="showSecret">نمایش</button></div>
+        <p><button class="danger small" id="rotate">تولید کلید جدید</button></p></div>
+      <div class="card"><h2>تغییر رمز عبور</h2>
+        <form id="pwForm" class="grid"><div><label>رمز فعلی</label><input type="password" name="current" class="ltr"></div><div><label>رمز جدید (حداقل ۱۰ کاراکتر)</label><input type="password" name="next" class="ltr"></div><div style="align-self:end"><button>تغییر</button></div></form>
+        <div id="pwMsg"></div></div>`;
+    $('#setForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const d = formData(e.target);
+      try {
+        await api('PATCH', '/api/panel/settings', { name: d.name, webhook_url: d.webhook_url || null, settlement_schedule: d.settlement_schedule, settlement_weekday: Number(d.settlement_weekday) });
+        showMsg($('#sMsg'), 'ذخیره شد', 'ok');
+      } catch (err) { showMsg($('#sMsg'), err.message); }
+    });
+    $('#showSecret').addEventListener('click', async () => { $('#secret').innerHTML = copyBox((await api('GET', '/api/panel/webhook-secret')).webhook_secret); });
+    $('#rotate').addEventListener('click', async () => {
+      if (confirm('کلید قبلی بلافاصله از کار می‌افتد. ادامه می‌دهید؟')) $('#secret').innerHTML = copyBox((await api('POST', '/api/panel/webhook-secret/rotate')).webhook_secret);
+    });
+    $('#pwForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { await api('POST', '/api/panel/password', formData(e.target)); location.reload(); }
+      catch (err) { showMsg($('#pwMsg'), err.message); }
+    });
+  },
+
+  async docs() {
+    const base = location.origin;
+    view().innerHTML = `<div class="card"><h2>اتصال به سایت شما</h2>
+      <p>۱) از تب «کلیدهای API» یک کلید بسازید. ۲) برای هر سفارش یک فاکتور بسازید و مشتری را به <code>payment_url</code> هدایت کنید. ۳) نتیجه را از Webhook دریافت و امضای آن را بررسی کنید.</p>
+      <h3>ساخت فاکتور</h3>
+<pre>curl -X POST ${esc(base)}/v1/invoices \\
+  -H "Authorization: Bearer txp_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"price_amount":"25","price_currency":"USD","order_id":"1001",
+       "success_url":"https://shop.example/thanks","metadata":{"user":42}}'</pre>
+      <p class="small muted">اگر <code>asset</code> (مثلاً <code>USDT_TRC20</code>) را نفرستید، مشتری ارز را در صفحه پرداخت انتخاب می‌کند.</p>
+      <h3>استعلام</h3><pre>GET ${esc(base)}/v1/invoices/{id}</pre>
+      <h3>Webhook</h3>
+      <p class="small">رویدادها: <code>invoice.confirming</code>، <code>invoice.paid</code>، <code>invoice.partially_paid</code>، <code>invoice.expired</code>، <code>invoice.cancelled</code>، <code>payout.created</code>، <code>payout.completed</code>، <code>payout.failed</code></p>
+<pre>// Node.js — بررسی امضا
+const sig = crypto.createHmac('sha256', WEBHOOK_SECRET)
+  .update(req.headers['x-webhook-timestamp'] + '.' + rawBody).digest('hex');
+if (sig !== req.headers['x-webhook-signature']) return res.status(401).end();
+// فقط وقتی event === 'invoice.paid' است سفارش را تحویل دهید.</pre>
+<pre>// PHP
+$sig = hash_hmac('sha256', $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] . '.' . file_get_contents('php://input'), $secret);
+if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_code(401); exit; }</pre>
+      <p class="small muted">به Webhook با کد 2xx پاسخ دهید؛ در غیر این صورت تا ${12} بار با فاصله افزایشی تکرار می‌شود. همیشه وضعیت را با <code>GET /v1/invoices/{id}</code> هم تطبیق دهید.</p></div>`;
+  },
+};
+
+function invoiceTable(rows) {
+  return table(['تاریخ', 'شناسه سفارش', 'مبلغ', 'ارز', 'دریافتی', 'کارمزد', 'وضعیت', ''], rows.map((i) => [
+    fmtDate(i.created_at), esc(i.order_id || '—'), `<span class="mono">${esc(i.price_amount)} ${esc(i.price_currency)}</span>`,
+    esc(i.asset || '—'), `<span class="mono">${esc(i.amount_received || '—')}</span>`, `<span class="mono">${esc(i.fee_amount || '—')}</span>`,
+    badge(i.status), `<a href="${esc(i.payment_url)}" target="_blank">صفحه پرداخت</a>`]));
+}
+
+boot();
+</script>
+</body>
+</html>

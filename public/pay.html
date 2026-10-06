@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>پرداخت فاکتور</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="wrap narrow">
+  <div class="card" id="root"><p class="muted">در حال بارگذاری…</p></div>
+  <p class="muted small" style="text-align:center">پرداخت امن با رمزارز</p>
+</div>
+<script src="/assets/app.js"></script>
+<script>
+const id = location.pathname.split('/').pop();
+let inv, timer;
+
+function countdown() {
+  const el = $('#countdown');
+  if (!el || !inv) return;
+  const ms = new Date(inv.expires_at) - Date.now();
+  if (ms <= 0) return (el.textContent = 'زمان پرداخت به پایان رسید');
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  el.textContent = `زمان باقی‌مانده: ${m}:${String(s).padStart(2, '0')}`;
+}
+
+function render() {
+  const root = $('#root');
+  const head = `<div class="topbar"><h1>${esc(inv.merchant_name || 'پرداخت')}</h1>${badge(inv.status)}</div>
+    ${inv.description ? `<p>${esc(inv.description)}</p>` : ''}
+    <p class="muted">مبلغ فاکتور: <b class="ltr">${esc(inv.price_amount)} ${esc(inv.price_currency)}</b></p>`;
+
+  if (!inv.asset) {
+    if (inv.status !== 'pending') return (root.innerHTML = head + '<div class="alert err">این فاکتور دیگر قابل پرداخت نیست.</div>');
+    root.innerHTML = head + `<h3>ارز و شبکه پرداخت را انتخاب کنید</h3><div class="assets">${inv.assets
+      .map((a) => `<button data-asset="${esc(a.id)}"><b>${esc(a.symbol)}</b><br><span class="small muted">${esc(a.network_name)}</span></button>`)
+      .join('')}</div><div id="msg"></div><p id="countdown" class="muted small"></p>`;
+    root.querySelectorAll('[data-asset]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try { inv = await api('POST', `/api/public/invoices/${id}/asset`, { asset: b.dataset.asset }); render(); }
+        catch (e) { showMsg($('#msg'), e.message); b.disabled = false; }
+      }));
+    return countdown();
+  }
+
+  if (inv.status === 'paid') {
+    root.innerHTML = head + `<div class="alert ok">پرداخت با موفقیت تایید شد. ✓</div>
+      <p>دریافت‌شده: <b class="ltr">${esc(inv.amount_received)} ${esc(inv.asset_symbol)}</b></p>
+      ${inv.success_url ? `<p class="muted small">در حال بازگشت به فروشگاه…</p><a class="btn" href="${esc(inv.success_url)}">بازگشت به فروشگاه</a>` : ''}`;
+    if (inv.success_url) setTimeout(() => (location.href = inv.success_url), 4000);
+    return;
+  }
+  if (inv.status === 'expired' || inv.status === 'cancelled') {
+    root.innerHTML = head + `<div class="alert err">${inv.status === 'expired' ? 'مهلت پرداخت این فاکتور تمام شده است. اگر مبلغی ارسال کرده‌اید با فروشنده تماس بگیرید.' : 'این فاکتور لغو شده است.'}</div>
+      ${inv.cancel_url ? `<a class="btn secondary" href="${esc(inv.cancel_url)}">بازگشت</a>` : ''}`;
+    return;
+  }
+
+  const remaining = inv.status === 'partially_paid' ? `<div class="alert warn">مبلغ دریافتی کمتر از مبلغ فاکتور است. دریافت‌شده: <span class="ltr">${esc(inv.amount_received)} + ${esc(inv.amount_pending)}</span> ${esc(inv.asset_symbol)} — لطفاً باقی‌مانده را به همین آدرس ارسال کنید.</div>` : '';
+  const confirming = inv.status === 'confirming' ? `<div class="alert ok">تراکنش شما دریافت شد و در انتظار ${esc(inv.confirmations_required)} تایید شبکه است…</div>` : '';
+  root.innerHTML = head + confirming + remaining + `
+    <label>دقیقاً این مبلغ را ارسال کنید</label>${copyBox(inv.pay_amount)}
+    <p class="small muted">ارز: <b>${esc(inv.asset_symbol)}</b> — شبکه: <b>${esc(inv.network_name)}</b>${inv.token_contract ? ` — قرارداد: <span class="mono">${esc(short(inv.token_contract, 6))}</span>` : ''}</p>
+    <label>به این آدرس</label>${copyBox(inv.address)}
+    ${inv.memo ? `<label>کامنت / Memo (الزامی)</label>${copyBox(inv.memo)}<div class="alert warn">بدون وارد کردن این کامنت، پرداخت شما شناسایی نمی‌شود.</div>` : ''}
+    ${inv.qr ? `<img class="qr" src="${inv.qr}" width="220" height="220" alt="QR">` : ''}
+    <div class="alert warn small">فقط ${esc(inv.asset_symbol)} را روی شبکه ${esc(inv.network_name)} ارسال کنید؛ ارسال روی شبکه یا ارز دیگر باعث از دست رفتن وجه می‌شود.</div>
+    <p id="countdown" class="muted small"></p>`;
+  countdown();
+}
+
+async function load() {
+  try { inv = await api('GET', `/api/public/invoices/${id}`); render(); }
+  catch (e) { $('#root').innerHTML = `<div class="alert err">${esc(e.status === 404 ? 'فاکتور یافت نشد.' : e.message)}</div>`; }
+  if (!inv || !['paid', 'cancelled'].includes(inv.status)) timer = setTimeout(load, 5000);
+}
+setInterval(countdown, 1000);
+load();
+</script>
+</body>
+</html>
