@@ -585,3 +585,29 @@ describe('security controls', () => {
     await app.close();
   });
 });
+
+describe('per-merchant currencies and stats', () => {
+  it('restricts a merchant to the currencies the admin allowed', async () => {
+    const m = await merchant();
+    await pool.query(`UPDATE merchants SET allowed_assets = ARRAY['USDT_BEP20','USDT_TON'] WHERE id = $1`, [m.id]);
+    expect((await invoices.merchantAssets(m.id)).map((a) => a.id)).toEqual(['USDT_BEP20', 'USDT_TON']);
+    await expect(invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' })).rejects.toThrow(/not enabled/);
+    const open = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD' });
+    expect((await invoices.payableAssets(open)).map((a) => a.id)).toEqual(['USDT_BEP20', 'USDT_TON']);
+    await expect(invoices.selectAsset(open.id, 'USDT_TRC20')).rejects.toThrow(/not enabled/);
+    expect((await invoices.selectAsset(open.id, 'USDT_BEP20')).asset).toBe('USDT_BEP20');
+    // Other merchants are unaffected.
+    expect((await invoices.merchantAssets((await merchant()).id)).length).toBeGreaterThan(2);
+  });
+
+  it('reports zero-filled daily stats', async () => {
+    const { dailyStats } = await import('../src/api/panel.js');
+    const m = await merchant();
+    const inv = await invoices.create(m.id, { price_amount: '12.5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    await invoices.recordDeposit({ invoiceId: inv.id, chain: 'tron', asset: 'USDT_TRC20', txHash: 'st1', eventIndex: '0', from: 'X', to: inv.address!, amount: 12_500_000n, confirmed: true });
+    const s = await dailyStats(m.id, 7);
+    expect(s).toHaveLength(7);
+    expect(s[6]).toMatchObject({ paid: 1, volume: 12.5 });
+    expect(s.slice(0, 6).every((d) => d.paid === 0)).toBe(true);
+  });
+});

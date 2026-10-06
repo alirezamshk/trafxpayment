@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>پنل پذیرنده — TrafxPayment</title>
+<title>TrafxPayment</title>
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
+<script src="/assets/i18n.js"></script>
 <script src="/assets/app.js"></script>
 <script>
 'use strict';
@@ -15,221 +16,223 @@ let me;
 async function start() {
   try { me = await api('GET', '/api/panel/me'); }
   catch {
-    await loginScreen({
-      title: 'ورود پذیرندگان', role: 'merchant',
-      subtitle: 'پرداخت رمزارزی را در چند دقیقه به کسب‌وکارتان اضافه کنید.',
-      features: ['تایید خودکار پرداخت روی بلاکچین', 'USDT روی TRON، BNB Chain و TON', 'تسویه خودکار روزانه یا هفتگی', 'API و Webhook امن'],
-    });
+    await loginScreen({ title: t('auth.merchantTitle'), pitch: t('auth.merchantPitch'), role: 'merchant' });
     me = await api('GET', '/api/panel/me');
   }
   createShell({
-    product: 'TrafxPayment', subtitle: 'پنل پذیرنده',
+    subtitle: t('m.panel'),
     user: { name: me.merchant.name, role: me.merchant.email },
     onLogout: async () => { await api('POST', '/api/auth/logout'); location.reload(); },
     nav: [
-      { id: 'dashboard', label: 'داشبورد', icon: 'dashboard' },
-      { id: 'invoices', label: 'فاکتورها', icon: 'invoice' },
-      { id: 'payouts', label: 'موجودی و تسویه', icon: 'payout' },
-      { id: 'addresses', label: 'آدرس‌های تسویه', icon: 'wallet' },
-      { section: 'توسعه‌دهندگان' },
-      { id: 'developers', label: 'API و Webhook', icon: 'code' },
-      { section: 'حساب' },
-      { id: 'settings', label: 'تنظیمات', icon: 'settings' },
-      { id: 'security', label: 'امنیت', icon: 'shield' },
+      { id: 'dashboard', label: t('m.nav.dashboard'), icon: 'dashboard' },
+      { id: 'invoices', label: t('m.nav.invoices'), icon: 'invoice' },
+      { id: 'payouts', label: t('m.nav.payouts'), icon: 'payout' },
+      { id: 'addresses', label: t('m.nav.addresses'), icon: 'wallet' },
+      { section: t('m.nav.secDev') },
+      { id: 'developers', label: t('m.nav.dev'), icon: 'code' },
+      { section: t('m.nav.secAccount') },
+      { id: 'settings', label: t('m.nav.settings'), icon: 'settings' },
+      { id: 'security', label: t('m.nav.security'), icon: 'shield' },
     ],
     views: VIEWS,
   });
 }
 
-const assetOptions = (selected = '') => me.assets.map((a) => `<option value="${esc(a.id)}" ${a.id === selected ? 'selected' : ''}>${esc(a.symbol)} — ${esc(a.network_name)}</option>`).join('');
+const assetOptions = (selected = '') => me.assets.map((a) => `<option value="${esc(a.id)}" ${a.id === selected ? 'selected' : ''}>${esc(a.symbol)} · ${esc(a.network_name)}</option>`).join('');
 const settingOf = (asset) => me.asset_settings.find((s) => s.asset === asset) || {};
+const newLinkBtn = () => `<button class="btn" id="hdr-new">${icon('plus')}<span class="btn-text">${esc(t('m.newLink'))}</span></button>`;
+const bindNewLink = () => { $('#hdr-new').onclick = newInvoiceDialog; };
 
+const INVOICE_HEAD = () => [t('inv.price'), t('inv.payAsset'), t('inv.received'), t('common.status'), t('common.date'), ''];
 function invoiceRows(list) {
   return list.map((i) => [
-    `<div><b>${fmtAmount(i.price_amount, 2)} ${esc(i.price_currency)}</b></div><div class="small muted">${esc(i.order_id ? '#' + i.order_id : short(i.id, 4))}</div>`,
-    i.asset ? `${assetLabel(i.asset)}<div class="small muted">${num(fmtAmount(i.pay_amount))}</div>` : '<span class="muted">انتخاب نشده</span>',
-    num(fmtAmount(i.amount_received)),
-    badge(i.status) + (i.is_late ? ' <span class="badge plain b-warn">دیرهنگام</span>' : ''),
+    `<span class="num strong">${esc(fmtAmount(i.price_amount, 2))}</span> <span class="muted small">${esc(i.price_currency)}</span><span class="sub">${esc(i.order_id ? '#' + i.order_id : short(i.id, 4))}</span>`,
+    i.asset ? `${assetLabel(i.asset)}<span class="sub"><span class="num">${esc(fmtAmount(i.pay_amount))}</span></span>` : `<span class="muted">${esc(t('inv.notChosen'))}</span>`,
+    num(i.amount_received),
+    badge(i.status) + (i.is_late ? ` <span class="badge plain b-warn">${esc(t('st.late'))}</span>` : ''),
     `<span class="small text-2">${fmtDate(i.created_at)}</span>`,
-    `<div class="row" style="flex-wrap:nowrap"><button class="btn sm secondary" data-inv="${esc(i.id)}">جزئیات</button><a class="btn sm ghost icon" href="${esc(i.payment_url)}" target="_blank" title="صفحه پرداخت">${icon('external')}</a></div>`,
+    `<div class="row" style="flex-wrap:nowrap;justify-content:flex-end"><button class="btn sm secondary" data-inv="${esc(i.id)}">${esc(t('common.details'))}</button><a class="btn sm ghost icon" href="${esc(i.payment_url)}" target="_blank" rel="noopener" title="${esc(t('inv.openPage'))}" aria-label="${esc(t('inv.openPage'))}">${icon('external')}</a></div>`,
   ]);
 }
-const INVOICE_HEAD = ['مبلغ', 'ارز پرداخت', 'دریافتی', 'وضعیت', 'تاریخ', ''];
 
 async function invoiceDetail(id) {
   const i = await api('GET', `/api/panel/invoices/${id}`);
-  const rows = [
-    ['وضعیت', badge(i.status)], ['مبلغ فاکتور', `${fmtAmount(i.price_amount, 2)} ${esc(i.price_currency)}`],
-    ['ارز / شبکه', i.asset ? `${assetLabel(i.asset)} · ${esc(NETWORK[i.network] || i.network)}` : '—'],
-    ['مبلغ قابل پرداخت', num(fmtAmount(i.pay_amount))], ['دریافتی', num(fmtAmount(i.amount_received))],
-    ['کارمزد درگاه', num(fmtAmount(i.fee_amount))], ['کارمزد شبکه', `${num(fmtAmount(i.network_fee))} <span class="muted small">${i.fee_paid_by === 'customer' ? '(پرداخت توسط مشتری)' : ''}</span>`],
-    ['خالص شما', `<b>${num(fmtAmount(i.net_amount))}</b>`], ['شناسه سفارش', esc(i.order_id || '—')], ['شناسه مشتری', esc(i.customer_id || '—')],
-    ['آدرس', i.address ? `<span class="mono small">${esc(i.address)}</span>` : '—'], ['ایجاد', fmtDate(i.created_at)], ['پرداخت', fmtDate(i.paid_at)],
+  const kv = [
+    [t('common.status'), badge(i.status)],
+    [t('inv.price'), `${num(i.price_amount, 2)} ${esc(i.price_currency)}`],
+    [`${t('common.asset')} / ${t('common.network')}`, i.asset ? `${assetLabel(i.asset)} · ${esc(NETWORK[i.network] || i.network)}` : '—'],
+    [t('inv.payable'), num(i.pay_amount)], [t('inv.received'), num(i.amount_received)],
+    [t('inv.gwFee'), num(i.fee_amount)], [t('inv.netFee'), `${num(i.network_fee)} <span class="muted small">${i.fee_paid_by === 'customer' ? esc(t('inv.byCustomer')) : ''}</span>`],
+    [t('inv.net'), `<b>${num(i.net_amount)}</b>`], [t('inv.orderId'), esc(i.order_id || '—')], [t('inv.customerId'), esc(i.customer_id || '—')],
+    [t('common.address'), i.address ? `<span class="mono small" style="word-break:break-all">${esc(i.address)}</span>` : '—'],
+    [t('inv.created'), fmtDate(i.created_at)], [t('inv.paidAt'), fmtDate(i.paid_at)],
   ];
-  await modal({
-    title: 'جزئیات فاکتور', ico: 'invoice',
-    body: `<div style="max-height:62vh;overflow:auto">${table(['', ''], rows)}
-      <h3 style="margin:14px 0 6px">تراکنش‌ها</h3>
-      ${table(['هش', 'مبلغ', 'تایید', 'وضعیت'], (i.deposits || []).map((d) => [`<span class="mono small">${esc(short(d.tx_hash, 8))}</span>`, num(fmtAmount(d.amount)), num(d.confirmations), badge(d.status)]), { empty: 'هنوز تراکنشی نرسیده' })}
-      <div style="margin-top:10px">${copyField(i.payment_url, { label: 'کپی لینک' })}</div></div>`,
-    buttons: i.status === 'pending' && !(i.deposits || []).length
-      ? [{ label: 'لغو فاکتور', value: 'cancel', cls: 'danger soft' }, { label: 'بستن', value: null }]
-      : [{ label: 'بستن', value: null }],
-  }).then(async (v) => {
-    if (v === 'cancel' && await confirmDialog('لغو فاکتور', 'این فاکتور لغو شود؟', { danger: true, ok: 'لغو فاکتور' })) {
-      await api('POST', `/api/panel/invoices/${id}/cancel`); toast('فاکتور لغو شد'); location.hash === '#invoices' ? VIEWS.invoices($('#view')) : null;
-    }
+  const canCancel = i.status === 'pending' && !(i.deposits || []).length;
+  const v = await modal({
+    title: t('inv.detail'), ico: 'invoice', wide: true,
+    body: `<div class="stack"><table class="kv-table"><tbody>${kv.map(([k, val]) => `<tr><td>${esc(k)}</td><td>${val}</td></tr>`).join('')}</tbody></table>
+      <h3>${esc(t('inv.txs'))}</h3>
+      <div class="panel">${table([t('inv.hash'), t('common.amount'), t('inv.confs'), t('common.status')], (i.deposits || []).map((d) => [`<span class="mono small">${esc(short(d.tx_hash, 8))}</span>`, num(d.amount), `<span class="num">${esc(d.confirmations)}</span>`, badge(d.status)]), { empty: t('inv.noTx') })}</div>
+      ${copyField(i.payment_url, { label: t('inv.copyLink') })}</div>`,
+    buttons: canCancel ? [{ label: t('inv.cancel'), value: 'cancel', cls: 'danger-soft' }, { label: t('common.close'), value: null }] : [{ label: t('common.close'), value: null }],
   });
+  if (v === 'cancel' && await confirmDialog(t('inv.cancel'), esc(t('inv.cancelQ')), { danger: true, ok: t('inv.cancel') })) {
+    try { await api('POST', `/api/panel/invoices/${id}/cancel`); toast(t('inv.cancelled')); window.dispatchEvent(new HashChangeEvent('hashchange')); } catch (e) { toast(errText(e), 'err'); }
+  }
 }
-document.addEventListener('click', (e) => { const b = e.target.closest('[data-inv]'); if (b) invoiceDetail(b.dataset.inv).catch((err) => toast(err.message, 'err')); });
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-inv]'); if (b) invoiceDetail(b.dataset.inv).catch((err) => toast(errText(err), 'err')); });
 
 async function newInvoiceDialog() {
   const d = await modal({
-    title: 'ساخت لینک پرداخت', ico: 'plus',
+    title: t('inv.new'), ico: 'plus',
     body: `<form id="ni" class="stack">
-      <div class="grid grid-2">${field('مبلغ', '<input name="price_amount" class="ltr" required placeholder="25">')}${field('واحد', '<select name="price_currency"><option>USD</option><option>USDT</option><option>EUR</option></select>')}</div>
-      ${field('ارز پرداخت', `<select name="asset"><option value="">انتخاب توسط مشتری (پیشنهادی)</option>${assetOptions()}</select>`)}
-      ${field('توضیحات', '<input name="description" placeholder="مثلاً: اشتراک یک‌ماهه">')}
-      ${field('شناسه مشتری (اختیاری)', '<input name="customer_id" class="ltr" placeholder="user-42">', 'برای مشتری‌های تکراری؛ هر مشتری یک آدرس دائمی می‌گیرد')}
+      <div class="grid grid-2">${field(t('common.amount'), '<input id="ni-amount" name="price_amount" class="ltr" required inputmode="decimal" placeholder="25">')}${field(t('inv.unit'), '<select id="ni-cur" name="price_currency"><option>USD</option><option>USDT</option><option>EUR</option></select>')}</div>
+      ${field(t('inv.payAsset'), `<select id="ni-asset" name="asset"><option value="">${esc(t('inv.chooseByCustomer'))}</option>${assetOptions()}</select>`)}
+      ${field(t('inv.desc'), `<input id="ni-desc" name="description" placeholder="${esc(t('inv.descPh'))}">`)}
+      ${field(`${t('inv.customerId')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-cust" name="customer_id" class="ltr" placeholder="user-42">', esc(t('inv.custHelp')))}
     </form>`,
-    buttons: [{ label: 'انصراف', value: null }, { label: 'ساخت لینک', value: (w) => formData($('#ni', w)) }],
+    buttons: [{ label: t('common.cancel'), value: null }, { label: t('inv.create'), value: (w) => formData($('#ni', w)) }],
   });
   if (!d) return;
   for (const k of ['asset', 'description', 'customer_id']) if (!d[k]) delete d[k];
   try {
     const r = await api('POST', '/api/panel/invoices', d);
-    await modal({ title: 'لینک پرداخت آماده است', ico: 'checkCircle', body: `<p>این لینک را برای مشتری بفرستید:</p>${copyField(r.payment_url, { label: 'کپی لینک' })}`, buttons: [{ label: 'باز کردن', value: () => window.open(r.payment_url, '_blank'), cls: 'secondary' }, { label: 'بستن', value: null }] });
-    if (location.hash === '#invoices') VIEWS.invoices($('#view'));
-  } catch (e) { toast(e.message, 'err'); }
+    await modal({
+      title: t('inv.ready'), ico: 'checkCircle',
+      body: `<div class="stack"><p>${esc(t('inv.sendLink'))}</p>${copyField(r.payment_url, { label: t('inv.copyLink') })}</div>`,
+      buttons: [{ label: t('inv.open'), value: () => window.open(r.payment_url, '_blank', 'noopener'), cls: 'secondary' }, { label: t('common.close'), value: null }],
+    });
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  } catch (e) { toast(errText(e), 'err'); }
 }
 
 const VIEWS = {
   async dashboard(el, ctx) {
-    ctx.setHeader('داشبورد', `خوش آمدید، ${esc(me.merchant.name)}`, `<button class="btn" id="hdr-new">${icon('plus')}لینک پرداخت</button>`);
-    $('#hdr-new').onclick = newInvoiceDialog;
-    const [bal, inv, addrs, keys] = await Promise.all([
+    ctx.setHeader(t('m.nav.dashboard'), esc(t('m.welcome', { name: me.merchant.name })), newLinkBtn());
+    bindNewLink();
+    const [bal, inv, addrs, keys, st] = await Promise.all([
       api('GET', '/api/panel/balances'), api('GET', '/api/panel/invoices?limit=100'),
-      api('GET', '/api/panel/payout-addresses'), api('GET', '/api/panel/api-keys'),
+      api('GET', '/api/panel/payout-addresses'), api('GET', '/api/panel/api-keys'), api('GET', '/api/panel/stats?days=14'),
     ]);
     const list = inv.data;
-    const today = new Date().toDateString();
     const paid = list.filter((i) => i.status === 'paid');
-    const usdVolume = paid.filter((i) => ['USD', 'USDT'].includes(i.price_currency)).reduce((s, i) => s + Number(i.price_amount), 0);
+    const usd = paid.filter((i) => ['USD', 'USDT'].includes(i.price_currency)).reduce((s, i) => s + Number(i.price_amount), 0);
+    const today = new Date().toDateString();
     const steps = [
-      [addrs.data.length > 0, 'آدرس کیف پول برای تسویه ثبت کنید', 'addresses'],
-      [keys.data.some((k) => !k.revoked_at), 'کلید API بسازید', 'developers'],
-      [!!me.merchant.webhook_url, 'آدرس Webhook سایت خود را وارد کنید', 'developers'],
-      [me.merchant.totp_enabled, 'تایید دومرحله‌ای را فعال کنید', 'security'],
+      [addrs.data.length > 0, t('m.setup.address'), 'addresses'],
+      [keys.data.some((k) => !k.revoked_at), t('m.setup.key'), 'developers'],
+      [!!me.merchant.webhook_url, t('m.setup.webhook'), 'developers'],
+      [me.merchant.totp_enabled, t('m.setup.tfa'), 'security'],
     ];
     const done = steps.filter((s) => s[0]).length;
     el.innerHTML = `
-      ${done < steps.length ? card({ title: 'راه‌اندازی حساب', desc: `${done} از ${steps.length} مرحله انجام شده`, body: `<div class="stack">${steps.map(([ok, t, v]) => `<div class="row">${ok ? `<span class="badge b-ok">انجام شد</span>` : `<span class="badge b-warn">مانده</span>`}<span class="${ok ? 'muted' : ''}">${t}</span>${ok ? '' : `<a class="btn sm secondary" href="#${v}" style="margin-inline-start:auto">انجام</a>`}</div>`).join('')}</div>` }) : ''}
-      <div class="grid grid-4" style="margin-bottom:18px">
-        ${kpi({ label: 'حجم پرداخت‌ها (دلاری)', value: fmtAmount(usdVolume.toFixed(2), 2), unit: 'USD', ico: 'trend', hint: `${paid.length} فاکتور پرداخت‌شده` })}
-        ${kpi({ label: 'پرداخت‌های امروز', value: paid.filter((i) => new Date(i.paid_at).toDateString() === today).length, ico: 'checkCircle', tone: 'ok' })}
-        ${kpi({ label: 'در انتظار پرداخت', value: list.filter((i) => ['pending', 'confirming'].includes(i.status)).length, ico: 'clock', tone: 'warn' })}
-        ${kpi({ label: 'کارمزد درگاه', value: `${esc(me.merchant.fee_percent.replace(/\.?0+$/, ''))}٪`, ico: 'coins', hint: `تسویه ${SCHEDULE[me.merchant.settlement_schedule]}` })}
-      </div>
+      ${done < steps.length ? panel({
+        title: t('m.setup'), desc: t('m.setupProgress', { done, total: steps.length }),
+        body: `<div class="stack"><div class="progress"><div style="width:${(done / steps.length) * 100}%"></div></div>
+          <div class="checklist">${steps.map(([ok, label, v]) => `<div class="item ${ok ? 'done' : ''}"><span class="tick">${icon('check')}</span><span class="label">${esc(label)}</span>${ok ? '' : `<a class="btn sm secondary" href="#${v}" style="margin-inline-start:auto">${esc(t('common.do'))}</a>`}</div>`).join('')}</div></div>`,
+      }) : ''}
+      ${stats([
+        { label: t('m.kpi.volume'), value: esc(fmtAmount(usd.toFixed(2), 2)), ico: 'trend', hint: esc(t('m.kpi.paidCount', { n: paid.length })) },
+        { label: t('m.kpi.today'), value: paid.filter((i) => new Date(i.paid_at).toDateString() === today).length, ico: 'checkCircle' },
+        { label: t('m.kpi.open'), value: list.filter((i) => ['pending', 'confirming', 'partially_paid'].includes(i.status)).length, ico: 'clock' },
+        { label: t('m.kpi.fee'), value: esc(String(me.merchant.fee_percent).replace(/\.?0+$/, '')) + '%', ico: 'coins', hint: esc(t('m.kpi.settle', { s: t('sch.' + me.merchant.settlement_schedule) })) },
+      ])}
       <div class="grid grid-main">
-        ${card({ title: 'آخرین فاکتورها', actions: '<a class="btn sm secondary" href="#invoices">همه</a>', flush: true, body: table(INVOICE_HEAD, invoiceRows(list.slice(0, 8)), { empty: 'هنوز فاکتوری ساخته نشده' }) })}
-        ${card({ title: 'موجودی قابل تسویه', actions: '<a class="btn sm secondary" href="#payouts">تسویه</a>', body: bal.data.length ? `<div class="stack">${bal.data.map((b) => `<div class="row"><span>${assetLabel(b.asset)}</span><span class="spacer"></span><b class="num">${fmtAmount(b.balance)}</b></div>`).join('')}</div>` : '<div class="empty">' + icon('wallet') + '<div>هنوز موجودی ندارید</div></div>' })}
-      </div>`;
+        ${volumePanel(st.data)}
+        ${panel({ title: t('m.balances'), actions: `<a class="btn sm secondary" href="#payouts">${esc(t('m.settleBtn'))}</a>`, flush: true,
+          body: table([t('common.asset'), t('common.amount')], bal.data.map((b) => [assetLabel(b.asset), `<b>${num(b.balance)}</b>`]), { empty: t('m.noBalance'), emptyIcon: 'wallet', end: [1] }) })}
+      </div>
+      ${panel({ title: t('m.recent'), actions: `<a class="btn sm secondary" href="#invoices">${esc(t('common.all'))}</a>`, flush: true, body: table(INVOICE_HEAD(), invoiceRows(list.slice(0, 8)), { empty: t('m.noInvoices') }) })}`;
   },
 
   async invoices(el, ctx, status = '') {
-    ctx?.setHeader('فاکتورها', 'همه پرداخت‌های شما', `<button class="btn" id="hdr-new">${icon('plus')}لینک پرداخت</button>`);
-    if (ctx) $('#hdr-new').onclick = newInvoiceDialog;
+    if (ctx) { ctx.setHeader(t('inv.title'), esc(t('inv.sub')), newLinkBtn()); bindNewLink(); }
     const r = await api('GET', `/api/panel/invoices?limit=100${status ? '&status=' + status : ''}`);
-    const tabs = [['', 'همه'], ['paid', 'پرداخت شده'], ['pending', 'در انتظار'], ['confirming', 'در حال تایید'], ['partially_paid', 'ناقص'], ['expired', 'منقضی']];
-    el.innerHTML = card({
-      flush: true,
-      body: `<div class="tabs" style="padding:0 12px;margin:0">${tabs.map(([k, t]) => `<button data-st="${k}" class="${k === status ? 'active' : ''}">${t}</button>`).join('')}</div>
-        ${table(INVOICE_HEAD, invoiceRows(r.data), { empty: 'فاکتوری با این وضعیت نیست' })}`,
-    });
-    $$('[data-st]', el).forEach((b) => b.addEventListener('click', () => VIEWS.invoices(el, null, b.dataset.st)));
+    el.innerHTML = panel({ flush: true, body: `${tabsBar([['', t('common.all')], ['paid', t('inv.tab.paid')], ['pending', t('inv.tab.pending')], ['confirming', t('inv.tab.confirming')], ['partially_paid', t('inv.tab.partial')], ['expired', t('inv.tab.expired')]], status)}
+      ${table(INVOICE_HEAD(), invoiceRows(r.data), { empty: t('inv.empty') })}` });
+    $$('[data-tab]', el).forEach((b) => b.addEventListener('click', () => VIEWS.invoices(el, null, b.dataset.tab)));
   },
 
   async payouts(el, ctx) {
-    ctx.setHeader('موجودی و تسویه', `تسویه ${SCHEDULE[me.merchant.settlement_schedule]} ساعت ${me.settlement_hour_utc}:00 UTC`);
+    ctx.setHeader(t('po.title'), esc(t('po.sub', { s: t('sch.' + me.merchant.settlement_schedule), h: me.settlement_hour_utc })));
     const [bal, p, l] = await Promise.all([api('GET', '/api/panel/balances'), api('GET', '/api/panel/payouts'), api('GET', '/api/panel/ledger')]);
     el.innerHTML = `
-      <div class="grid grid-3" style="margin-bottom:18px">
-        ${bal.data.map((b) => `<div class="kpi"><div class="label"><span class="ico">${icon('coins')}</span>${assetLabel(b.asset)}</div>
-          <div class="value num">${fmtAmount(b.balance)}</div>
-          <div class="row" style="margin-top:10px"><span class="small muted">کارمزد شبکه تسویه: ${esc(settingOf(b.asset).payout_fee || '0')}</span><span class="spacer"></span>
-          <button class="btn sm" data-req="${esc(b.asset)}" ${Number(b.balance) > 0 ? '' : 'disabled'}>تسویه فوری</button></div></div>`).join('') || `<div class="kpi">${alertBox('info', 'هنوز موجودی ندارید.')}</div>`}
-      </div>
-      ${card({ title: 'تاریخچه تسویه', flush: true, body: table(['تاریخ', 'ارز', 'مبلغ', 'کارمزد شبکه', 'مقصد', 'وضعیت', 'تراکنش'], p.data.map((x) => [fmtDate(x.created_at), assetLabel(x.asset), `<b class="num">${fmtAmount(x.amount)}</b>`, num(fmtAmount(x.fee)), `<span class="mono small">${esc(short(x.address))}</span>`, badge(x.status), x.tx_hash ? `<span class="mono small">${esc(short(x.tx_hash, 8))}</span>` : '—']), { empty: 'هنوز تسویه‌ای انجام نشده' }) })}
-      ${card({ title: 'گردش حساب', desc: 'همه ورود و خروج‌های موجودی شما', flush: true, body: table(['تاریخ', 'نوع', 'ارز', 'مبلغ', 'توضیح'], l.data.map((x) => [fmtDate(x.created_at), esc(LEDGER[x.type] || x.type), assetLabel(x.asset), `<b class="num" style="color:${String(x.amount).startsWith('-') ? 'var(--err)' : 'var(--ok)'}">${fmtAmount(x.amount)}</b>`, `<span class="small muted">${esc(x.note || '')}</span>`]), { empty: 'گردشی ثبت نشده' }) })}`;
+      ${panel({ title: t('m.balances'), flush: true, body: table([t('common.asset'), t('common.amount'), t('inv.netFee'), ''], bal.data.map((b) => [
+        assetLabel(b.asset), `<b>${num(b.balance)}</b>`, num(settingOf(b.asset).payout_fee || '0'),
+        `<button class="btn sm" data-req="${esc(b.asset)}" ${Number(b.balance) > Number(settingOf(b.asset).payout_fee || 0) ? '' : 'disabled'}>${esc(t('po.instant'))}</button>`,
+      ]), { empty: t('m.noBalance'), emptyIcon: 'wallet', end: [1, 2, 3] }) })}
+      ${panel({ title: t('po.history'), flush: true, body: table([t('common.date'), t('common.asset'), t('common.amount'), t('inv.netFee'), t('po.dest'), t('common.status'), t('po.tx')], p.data.map((x) => [
+        `<span class="small text-2">${fmtDate(x.created_at)}</span>`, assetLabel(x.asset), `<b>${num(x.amount)}</b>`, num(x.fee), `<span class="mono small">${esc(short(x.address))}</span>`, badge(x.status),
+        x.tx_hash ? `<span class="mono small">${esc(short(x.tx_hash, 8))}</span>` : '—']), { empty: t('po.noHistory'), emptyIcon: 'payout', end: [2, 3] }) })}
+      ${panel({ title: t('po.ledger'), desc: t('po.ledgerSub'), flush: true, body: table([t('common.date'), t('po.type'), t('common.asset'), t('common.amount'), t('po.note')], l.data.map((x) => [
+        `<span class="small text-2">${fmtDate(x.created_at)}</span>`, esc(t('lg.' + x.type)), assetLabel(x.asset),
+        `<b class="num" style="color:${String(x.amount).startsWith('-') ? 'var(--err)' : 'var(--ok)'}">${esc(fmtAmount(x.amount))}</b>`, `<span class="small muted">${esc(x.note || '')}</span>`]), { empty: t('po.noLedger'), end: [3] }) })}`;
     $$('[data-req]', el).forEach((b) => b.addEventListener('click', async () => {
       const a = b.dataset.req;
-      if (!(await confirmDialog('درخواست تسویه', `کل موجودی ${a} منهای کارمزد شبکه (${esc(settingOf(a).payout_fee)}) به آدرس تسویه شما فرستاده می‌شود.`))) return;
-      await busy(b, async () => { await api('POST', '/api/panel/payouts', { asset: a }); toast('درخواست تسویه ثبت شد'); VIEWS.payouts(el, ctx); });
+      if (!(await confirmDialog(t('po.reqTitle'), esc(t('po.reqText', { a, f: settingOf(a).payout_fee || '0' }))))) return;
+      await busy(b, async () => { await api('POST', '/api/panel/payouts', { asset: a }); toast(t('po.requested')); VIEWS.payouts(el, ctx); });
     }));
   },
 
   async addresses(el, ctx) {
-    ctx.setHeader('آدرس‌های تسویه', 'موجودی هر ارز به آدرس همان ارز فرستاده می‌شود', `<button class="btn" id="add-addr">${icon('plus')}افزودن آدرس</button>`);
+    ctx.setHeader(t('ad.title'), esc(t('ad.sub')), `<button class="btn" id="add-addr">${icon('plus')}<span class="btn-text">${esc(t('ad.add'))}</span></button>`);
     const a = await api('GET', '/api/panel/payout-addresses');
-    el.innerHTML = `${alertBox('info', 'برای امنیت، بعد از <b>تغییر</b> آدرس تسویه، تا ۲۴ ساعت به آدرس جدید تسویه‌ای فرستاده نمی‌شود.', 'lock')}<div style="height:14px"></div>
-      ${card({ flush: true, body: table(['ارز', 'آدرس', 'حداقل مبلغ تسویه', 'کارمزد شبکه', 'وضعیت', ''], a.data.map((x) => {
+    el.innerHTML = `${alertBox('info', t('ad.hold'), 'lock')}
+      ${panel({ flush: true, body: table([t('common.asset'), t('common.address'), t('ad.min'), t('inv.netFee'), t('common.status'), ''], a.data.map((x) => {
         const held = x.locked_until && new Date(x.locked_until) > new Date();
-        return [assetLabel(x.asset), `<span class="mono small">${esc(x.address)}</span>`, num(fmtAmount(x.min_amount)), num(settingOf(x.asset).payout_fee || '0'),
-          held ? `<span class="badge b-warn">تا ${fmtDate(x.locked_until)} در انتظار</span>` : '<span class="badge b-ok">فعال</span>',
-          `<div class="row" style="flex-wrap:nowrap"><button class="btn sm secondary" data-edit="${esc(x.asset)}">ویرایش</button><button class="btn sm ghost icon" data-del="${esc(x.asset)}" title="حذف">${icon('x')}</button></div>`];
-      }), { empty: 'هنوز آدرسی ثبت نکرده‌اید', emptyIcon: 'wallet' }) })}`;
+        return [assetLabel(x.asset), `<span class="mono small">${esc(x.address)}</span>`, num(x.min_amount), num(settingOf(x.asset).payout_fee || '0'),
+          held ? `<span class="badge b-warn">${esc(t('st.held'))} · ${esc(t('ad.until', { d: fmtDate(x.locked_until) }))}</span>` : `<span class="badge b-ok">${esc(t('common.active'))}</span>`,
+          `<div class="row" style="flex-wrap:nowrap;justify-content:flex-end"><button class="btn sm secondary" data-edit="${esc(x.asset)}">${esc(t('common.edit'))}</button><button class="btn sm ghost icon" data-del="${esc(x.asset)}" title="${esc(t('common.delete'))}" aria-label="${esc(t('common.delete'))}">${icon('x')}</button></div>`];
+      }), { empty: t('ad.empty'), emptyIcon: 'wallet', end: [2, 3] }) })}`;
     const edit = async (asset = '') => {
       const cur = a.data.find((x) => x.asset === asset);
       const d = await modal({
-        title: cur ? `ویرایش آدرس ${asset}` : 'افزودن آدرس تسویه', ico: 'wallet',
-        body: `<form id="af" class="stack">${field('ارز', `<select name="asset" ${cur ? 'disabled' : ''}>${assetOptions(asset)}</select>`)}
-          ${field('آدرس کیف پول', `<input name="address" class="ltr" required value="${esc(cur?.address || '')}">`, 'فقط آدرس همین شبکه؛ آدرس اشتباه یعنی از دست رفتن وجه')}
-          ${field('حداقل مبلغ تسویه', `<input name="min_amount" class="ltr" value="${esc(cur?.min_amount || '0')}">`, 'موجودی کمتر از این به دوره بعد منتقل می‌شود')}</form>`,
-        buttons: [{ label: 'انصراف', value: null }, { label: 'ذخیره', value: (w) => ({ ...formData($('#af', w)), asset: asset || $('#af [name=asset]', w).value }) }],
+        title: cur ? t('ad.editTitle', { a: asset }) : t('ad.addTitle'), ico: 'wallet',
+        body: `<form id="af" class="stack">${field(t('common.asset'), `<select id="af-asset" name="asset" ${cur ? 'disabled' : ''}>${assetOptions(asset)}</select>`)}
+          ${field(t('ad.wallet'), `<input id="af-addr" name="address" class="ltr" required value="${esc(cur?.address || '')}">`, esc(t('ad.walletHelp')))}
+          ${field(t('ad.min'), `<input id="af-min" name="min_amount" class="ltr" inputmode="decimal" value="${esc(cur?.min_amount || '0')}">`, esc(t('ad.minHelp')))}</form>`,
+        buttons: [{ label: t('common.cancel'), value: null }, { label: t('common.save'), value: (w) => ({ ...formData($('#af', w)), asset: asset || $('#af-asset', w).value }) }],
       });
       if (!d) return;
       try {
         const r = await api('PUT', '/api/panel/payout-addresses', d);
-        toast(r.held_hours ? `ذخیره شد؛ تسویه به آدرس جدید از ${r.held_hours} ساعت دیگر` : 'ذخیره شد');
+        toast(r.held_hours ? t('ad.savedHeld', { h: r.held_hours }) : t('common.saved'));
         VIEWS.addresses(el, ctx);
-      } catch (e) { toast(e.message, 'err'); }
+      } catch (e) { toast(errText(e), 'err'); }
     };
     $('#add-addr').onclick = () => edit();
     $$('[data-edit]', el).forEach((b) => b.addEventListener('click', () => edit(b.dataset.edit)));
     $$('[data-del]', el).forEach((b) => b.addEventListener('click', async () => {
-      if (!(await confirmDialog('حذف آدرس', `آدرس تسویه ${esc(b.dataset.del)} حذف شود؟`, { danger: true, ok: 'حذف' }))) return;
-      try { await api('DELETE', `/api/panel/payout-addresses/${b.dataset.del}`); toast('حذف شد'); VIEWS.addresses(el, ctx); } catch (e) { toast(e.message, 'err'); }
+      if (!(await confirmDialog(t('ad.delTitle'), esc(t('ad.delQ', { a: b.dataset.del })), { danger: true, ok: t('common.delete') }))) return;
+      try { await api('DELETE', `/api/panel/payout-addresses/${b.dataset.del}`); toast(t('ad.deleted')); VIEWS.addresses(el, ctx); } catch (e) { toast(errText(e), 'err'); }
     }));
   },
 
   async developers(el, ctx) {
-    ctx.setHeader('API و Webhook', 'اتصال سایت یا اپلیکیشن شما به درگاه');
+    ctx.setHeader(t('dev.title'), esc(t('dev.sub')));
     const k = await api('GET', '/api/panel/api-keys');
     const base = location.origin;
     el.innerHTML = `
-      ${card({ title: 'کلیدهای API', desc: 'هر کلید را فقط در سرور خود نگه دارید', actions: `<button class="btn sm" id="new-key">${icon('plus')}کلید جدید</button>`, flush: true,
-        body: table(['نام', 'کلید', 'IPهای مجاز', 'آخرین استفاده', 'وضعیت', ''], k.data.map((x) => [
+      ${panel({ title: t('dev.keys'), desc: t('dev.keysSub'), actions: `<button class="btn sm" id="new-key">${icon('plus')}${esc(t('dev.newKey'))}</button>`, flush: true,
+        body: table([t('dev.name'), t('dev.key'), t('dev.ips'), t('dev.lastUsed'), t('common.status'), ''], k.data.map((x) => [
           `<b>${esc(x.label)}</b>`, `<span class="mono small">${esc(x.key_prefix)}…</span>`,
-          x.allowed_ips?.length ? `<span class="mono small">${esc(x.allowed_ips.join(', '))}</span>` : '<span class="muted small">همه</span>',
-          fmtDate(x.last_used_at), x.revoked_at ? '<span class="badge b-muted">باطل شده</span>' : '<span class="badge b-ok">فعال</span>',
-          x.revoked_at ? '' : `<div class="row" style="flex-wrap:nowrap"><button class="btn sm secondary" data-ips="${esc(x.id)}">IPها</button><button class="btn sm danger soft" data-revoke="${esc(x.id)}">ابطال</button></div>`,
-        ]), { empty: 'هنوز کلیدی نساخته‌اید', emptyIcon: 'key' }) })}
-      ${card({ title: 'Webhook', desc: 'درگاه نتیجه پرداخت را به این آدرس POST می‌کند', body: `
-        <form id="wh" class="form-grid" style="grid-template-columns:1fr auto">${field('آدرس Webhook', `<input name="webhook_url" class="ltr" placeholder="https://yoursite.com/payment/callback" value="${esc(me.merchant.webhook_url || '')}">`)}<button class="btn">ذخیره</button></form>
-        <div class="row" style="margin-top:14px"><span class="text-2">کلید امضای Webhook</span><span class="spacer"></span><button class="btn sm secondary" id="show-secret">نمایش</button><button class="btn sm danger soft" id="rotate-secret">تعویض</button></div>
-        <div id="secret" style="margin-top:8px"></div>` })}
-      ${card({ title: 'راهنمای اتصال', body: `
-        <p>۱) یک کلید API بسازید. ۲) برای هر سفارش فاکتور بسازید و مشتری را به <code>payment_url</code> هدایت کنید. ۳) نتیجه را از Webhook بگیرید و امضای آن را بررسی کنید.</p>
-        <h3>ساخت فاکتور</h3>
+          x.allowed_ips?.length ? `<span class="mono small">${esc(x.allowed_ips.join(', '))}</span>` : `<span class="muted small">${esc(t('dev.anyIp'))}</span>`,
+          `<span class="small text-2">${fmtDate(x.last_used_at)}</span>`, x.revoked_at ? `<span class="badge b-muted">${esc(t('st.revoked'))}</span>` : `<span class="badge b-ok">${esc(t('common.active'))}</span>`,
+          x.revoked_at ? '' : `<div class="row" style="flex-wrap:nowrap;justify-content:flex-end"><button class="btn sm secondary" data-ips="${esc(x.id)}">${esc(t('dev.ips'))}</button><button class="btn sm danger-soft" data-revoke="${esc(x.id)}">${esc(t('dev.revoke'))}</button></div>`,
+        ]), { empty: t('dev.noKeys'), emptyIcon: 'key' }) })}
+      ${panel({ title: t('dev.webhook'), desc: t('dev.webhookSub'), body: `<div class="stack">
+        <form id="wh" class="form-grid" style="grid-template-columns:minmax(0,1fr) auto">${field(t('dev.webhookUrl'), `<input id="wh-url" name="webhook_url" class="ltr" placeholder="https://yoursite.com/payment/callback" value="${esc(me.merchant.webhook_url || '')}">`)}<button class="btn">${esc(t('common.save'))}</button></form>
+        <div class="row"><span class="text-2">${esc(t('dev.secret'))}</span><span class="spacer"></span><button class="btn sm secondary" id="show-secret">${esc(t('dev.show'))}</button><button class="btn sm danger-soft" id="rotate-secret">${esc(t('dev.rotate'))}</button></div>
+        <div id="secret"></div></div>` })}
+      ${panel({ title: t('dev.guide'), body: `<div class="stack">
+        <p>${t('dev.guide1')}</p>
+        <h3>${esc(t('dev.createInvoice'))}</h3>
 <pre>curl -X POST ${esc(base)}/v1/invoices \\
   -H "Authorization: Bearer txp_..." -H "Content-Type: application/json" \\
   -d '{"price_amount":"25","price_currency":"USD","order_id":"1001",
        "customer_id":"user-42","success_url":"https://shop.example/thanks"}'</pre>
-        <div class="stack small">
-          ${alertBox('info', '<b>customer_id</b> را برای کاربران تکراری بفرستید (بروکر، شارژ حساب، اشتراک): هر کاربر یک آدرس دائمی می‌گیرد. برای خریدهای یک‌باره نفرستید.')}
-          ${alertBox('warn', '<b>امنیت:</b> customer_id را همیشه از جلسه کاربرِ واردشده در سرور خودتان بفرستید، نه از ورودی کاربر.')}
-        </div>
-        <h3 style="margin-top:14px">بررسی امضای Webhook</h3>
+        ${alertBox('info', t('dev.custTip'))}${alertBox('warn', t('dev.custSec'))}${alertBox('info', t('dev.langTip'), 'globe')}
+        <h3>${esc(t('dev.verify'))}</h3>
 <pre>// Node.js
 const sig = crypto.createHmac('sha256', WEBHOOK_SECRET)
   .update(req.headers['x-webhook-timestamp'] + '.' + rawBody).digest('hex');
@@ -238,73 +241,76 @@ if (event === 'invoice.paid') deliverOrder(data.order_id);</pre>
 <pre>// PHP
 $sig = hash_hmac('sha256', $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] . '.' . file_get_contents('php://input'), $secret);
 if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_code(401); exit; }</pre>
-        <p class="small muted">رویدادها: <code>invoice.confirming</code> · <code>invoice.paid</code> · <code>invoice.updated</code> · <code>invoice.partially_paid</code> · <code>invoice.expired</code> · <code>invoice.cancelled</code> · <code>payout.created</code> · <code>payout.completed</code> · <code>payout.failed</code></p>` })}`;
+        <p class="small muted">${esc(t('dev.events'))}: <code>invoice.confirming</code> · <code>invoice.paid</code> · <code>invoice.updated</code> · <code>invoice.partially_paid</code> · <code>invoice.expired</code> · <code>invoice.cancelled</code> · <code>payout.created</code> · <code>payout.completed</code> · <code>payout.failed</code></p></div>` })}`;
 
     $('#new-key').onclick = async () => {
       const d = await modal({
-        title: 'کلید API جدید', ico: 'key',
-        body: `<form id="kf" class="stack">${field('نام کلید', '<input name="label" placeholder="سایت اصلی" required>')}
-          ${field('IPهای مجاز (اختیاری)', '<input name="allowed_ips" class="ltr" placeholder="203.0.113.7, 10.0.0.0/24">', 'فقط درخواست از این IPها پذیرفته می‌شود. خالی = همه')}</form>`,
-        buttons: [{ label: 'انصراف', value: null }, { label: 'ساخت', value: (w) => formData($('#kf', w)) }],
+        title: t('dev.newKey'), ico: 'key',
+        body: `<form id="kf" class="stack">${field(t('dev.keyName'), `<input id="kf-label" name="label" required placeholder="${esc(t('dev.keyNamePh'))}">`)}
+          ${field(`${t('dev.ips')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="kf-ips" name="allowed_ips" class="ltr" placeholder="203.0.113.7, 10.0.0.0/24">', esc(t('dev.ipsHelp')))}</form>`,
+        buttons: [{ label: t('common.cancel'), value: null }, { label: t('dev.create'), value: (w) => formData($('#kf', w)) }],
       });
       if (!d) return;
       try {
         const r = await api('POST', '/api/panel/api-keys', { label: d.label || 'default', allowed_ips: d.allowed_ips });
-        await modal({ title: 'کلید ساخته شد', ico: 'key', body: `${alertBox('warn', 'این کلید <b>فقط همین یک بار</b> نمایش داده می‌شود. آن را در جای امن ذخیره کنید.')}<div style="height:10px"></div>${copyField(r.key)}`, buttons: [{ label: 'ذخیره کردم', value: true }] });
+        await modal({ title: t('dev.keyCreated'), ico: 'key', body: `<div class="stack">${alertBox('warn', t('dev.keyOnce'))}${copyField(r.key)}</div>`, buttons: [{ label: t('dev.savedIt'), value: true }] });
         VIEWS.developers(el, ctx);
-      } catch (e) { toast(e.message, 'err'); }
+      } catch (e) { toast(errText(e), 'err'); }
     };
     $$('[data-ips]', el).forEach((b) => b.addEventListener('click', async () => {
       const cur = k.data.find((x) => x.id === b.dataset.ips)?.allowed_ips?.join(', ') || '';
-      const v = await promptDialog('IPهای مجاز', { label: 'IP یا محدوده CIDR، جدا با کاما', value: cur, help: 'خالی = همه IPها' });
+      const v = await promptDialog(t('dev.ipsTitle'), { label: t('dev.ipsLabel'), value: cur, help: esc(t('dev.ipsHelp')), ltr: true });
       if (v === null) return;
-      try { await api('PATCH', `/api/panel/api-keys/${b.dataset.ips}`, { allowed_ips: v }); toast('ذخیره شد'); VIEWS.developers(el, ctx); } catch (e) { toast(e.message, 'err'); }
+      try { await api('PATCH', `/api/panel/api-keys/${b.dataset.ips}`, { allowed_ips: v }); toast(t('common.saved')); VIEWS.developers(el, ctx); } catch (e) { toast(errText(e), 'err'); }
     }));
     $$('[data-revoke]', el).forEach((b) => b.addEventListener('click', async () => {
-      if (!(await confirmDialog('ابطال کلید', 'سایت‌هایی که از این کلید استفاده می‌کنند بلافاصله قطع می‌شوند.', { danger: true, ok: 'ابطال' }))) return;
-      await api('DELETE', `/api/panel/api-keys/${b.dataset.revoke}`); toast('کلید باطل شد'); VIEWS.developers(el, ctx);
+      if (!(await confirmDialog(t('dev.revokeTitle'), esc(t('dev.revokeQ')), { danger: true, ok: t('dev.revoke') }))) return;
+      await busy(b, async () => { await api('DELETE', `/api/panel/api-keys/${b.dataset.revoke}`); toast(t('dev.revoked')); VIEWS.developers(el, ctx); });
     }));
     $('#wh').addEventListener('submit', (e) => {
       e.preventDefault();
-      busy(e.submitter, async () => { await api('PATCH', '/api/panel/settings', { webhook_url: formData(e.target).webhook_url || null }); me = await api('GET', '/api/panel/me'); toast('ذخیره شد'); });
+      busy(e.submitter, async () => { await api('PATCH', '/api/panel/settings', { webhook_url: formData(e.target).webhook_url || null }); me = await api('GET', '/api/panel/me'); toast(t('common.saved')); });
     });
-    $('#show-secret').onclick = async () => { try { $('#secret').innerHTML = copyField((await api('GET', '/api/panel/webhook-secret')).webhook_secret); } catch (e) { toast(e.message, 'err'); } };
+    $('#show-secret').onclick = async () => { try { $('#secret').innerHTML = copyField((await api('GET', '/api/panel/webhook-secret')).webhook_secret); } catch (e) { toast(errText(e), 'err'); } };
     $('#rotate-secret').onclick = async () => {
-      if (!(await confirmDialog('تعویض کلید Webhook', 'کلید قبلی بلافاصله از کار می‌افتد و باید در سایت خود کلید جدید را بگذارید.', { danger: true, ok: 'تعویض' }))) return;
-      try { $('#secret').innerHTML = copyField((await api('POST', '/api/panel/webhook-secret/rotate')).webhook_secret); } catch (e) { toast(e.message, 'err'); }
+      if (!(await confirmDialog(t('dev.rotateTitle'), esc(t('dev.rotateQ')), { danger: true, ok: t('dev.rotate') }))) return;
+      try { $('#secret').innerHTML = copyField((await api('POST', '/api/panel/webhook-secret/rotate')).webhook_secret); } catch (e) { toast(errText(e), 'err'); }
     };
   },
 
   async settings(el, ctx) {
-    ctx.setHeader('تنظیمات');
+    ctx.setHeader(t('set.title'));
     me = await api('GET', '/api/panel/me');
     const m = me.merchant;
-    el.innerHTML = card({ title: 'تنظیمات کسب‌وکار', body: `<form id="sf" class="stack">
-      <div class="grid grid-2">
-        ${field('نام فروشگاه', `<input name="name" value="${esc(m.name)}">`)}
-        ${field('کارمزد شبکه واریز را چه کسی بپردازد؟', `<select name="fee_payer"><option value="merchant" ${m.fee_payer === 'merchant' ? 'selected' : ''}>من (از سهم من کسر شود)</option><option value="customer" ${m.fee_payer === 'customer' ? 'selected' : ''}>مشتری (به مبلغ پرداخت اضافه شود)</option></select>`, 'مثل NOWPayments؛ قابل تغییر برای هر فاکتور با fee_paid_by')}
-        ${field('زمان‌بندی تسویه', `<select name="settlement_schedule">${Object.entries(SCHEDULE).map(([k, v]) => `<option value="${k}" ${k === m.settlement_schedule ? 'selected' : ''}>${v}</option>`).join('')}</select>`, 'تسویه کمتر یعنی کارمزد شبکه کمتر')}
-        ${field('روز تسویه هفتگی', `<select name="settlement_weekday">${WEEKDAYS.map((d, i) => `<option value="${i}" ${i === m.settlement_weekday ? 'selected' : ''}>${d}</option>`).join('')}</select>`)}
-      </div>
-      <div class="row"><button class="btn">ذخیره تغییرات</button></div></form>` });
+    const wd = t('wd');
+    el.innerHTML = `
+      ${panel({ title: t('set.business'), body: `<form id="sf" class="stack">
+        <div class="grid grid-2">
+          ${field(t('set.name'), `<input id="sf-name" name="name" value="${esc(m.name)}">`)}
+          ${field(t('set.feePayer'), `<select id="sf-payer" name="fee_payer"><option value="merchant" ${m.fee_payer === 'merchant' ? 'selected' : ''}>${esc(t('set.payerMerchant'))}</option><option value="customer" ${m.fee_payer === 'customer' ? 'selected' : ''}>${esc(t('set.payerCustomer'))}</option></select>`, esc(t('set.payerHelp')))}
+          ${field(t('set.schedule'), `<select id="sf-sch" name="settlement_schedule">${['daily', 'weekly', 'manual'].map((k) => `<option value="${k}" ${k === m.settlement_schedule ? 'selected' : ''}>${esc(t('sch.' + k))}</option>`).join('')}</select>`, esc(t('set.scheduleHelp')))}
+          ${field(t('set.weekday'), `<select id="sf-wd" name="settlement_weekday">${wd.map((d, i) => `<option value="${i}" ${i === m.settlement_weekday ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>`)}
+        </div>
+        <div><button class="btn">${esc(t('set.saveChanges'))}</button></div></form>` })}
+      ${panel({ title: t('set.currencies'), body: `<div class="row">${me.assets.map((a) => `<span class="badge b-info">${esc(a.symbol)} · ${esc(a.network_name)}</span>`).join('')}</div>` })}`;
     $('#sf').addEventListener('submit', (e) => {
       e.preventDefault();
       const d = formData(e.target);
-      busy(e.submitter, async () => { await api('PATCH', '/api/panel/settings', { ...d, settlement_weekday: Number(d.settlement_weekday) }); me = await api('GET', '/api/panel/me'); toast('ذخیره شد'); });
+      busy(e.submitter, async () => { await api('PATCH', '/api/panel/settings', { ...d, settlement_weekday: Number(d.settlement_weekday) }); me = await api('GET', '/api/panel/me'); toast(t('common.saved')); });
     });
   },
 
   async security(el, ctx) {
-    ctx.setHeader('امنیت');
+    ctx.setHeader(t('sec.title'));
     el.innerHTML = `<div class="grid grid-2">
-      ${card({ title: 'تایید دومرحله‌ای (2FA)', body: '<div id="tfa"></div>' })}
-      ${card({ title: 'تغییر رمز عبور', body: `<form id="pw" class="stack">${field('رمز فعلی', '<input type="password" name="current" class="ltr" required>')}${field('رمز جدید', '<input type="password" name="next" class="ltr" minlength="10" required>', 'حداقل ۱۰ کاراکتر')}<div><button class="btn">تغییر رمز</button></div></form>` })}
-    </div>${card({ title: 'گزارش فعالیت', desc: 'ورودها و تغییرات حساس حساب شما', flush: true, body: '<div id="audit"></div>' })}`;
+      ${panel({ title: t('tfa.title'), body: '<div id="tfa"></div>' })}
+      ${panel({ title: t('sec.pw'), body: `<form id="pw" class="stack">${field(t('sec.pwCur'), '<input id="pw-cur" type="password" name="current" class="ltr" required autocomplete="current-password">')}${field(t('sec.pwNew'), '<input id="pw-new" type="password" name="next" class="ltr" minlength="10" required autocomplete="new-password">', esc(t('sec.pwHelp')))}<div><button class="btn">${esc(t('sec.pwBtn'))}</button></div></form>` })}
+    </div>${panel({ title: t('au.title'), desc: t('sec.activity'), flush: true, body: '<div id="audit"></div>' })}`;
     await twoFactorSection($('#tfa'), '/api/panel', () => VIEWS.security(el, ctx));
     $('#audit').innerHTML = auditTable((await api('GET', '/api/panel/audit')).data);
     $('#pw').addEventListener('submit', (e) => {
       e.preventDefault();
-      busy(e.submitter, async () => { await api('POST', '/api/panel/password', formData(e.target)); toast('رمز تغییر کرد؛ دوباره وارد شوید'); setTimeout(() => location.reload(), 1200); });
+      busy(e.submitter, async () => { await api('POST', '/api/panel/password', formData(e.target)); toast(t('sec.pwDone')); setTimeout(() => location.reload(), 1200); });
     });
   },
 };

@@ -100,6 +100,7 @@ export async function merchantApiRoutes(app: FastifyInstance) {
     invoices.serialize(await invoices.cancel(req.params.id, req.merchant!.id)),
   );
 
+  app.get('/currencies', async (req) => ({ data: await invoices.merchantAssets(req.merchant!.id) }));
   app.get('/balances', async (req) => ({ data: await balancesView(req.merchant!.id) }));
   app.get('/payouts', async (req) => ({ data: await payoutsView(req.merchant!.id) }));
   app.post('/payouts', async (req, reply) => {

@@ -9,7 +9,7 @@ import { audit, auditList } from '../services/audit.js';
 import { requireAdminSession } from './auth.js';
 import { otpFromRequest, requireOtp, resetTwoFactor, twoFactorRoutes } from './twofactor.js';
 import { balancesView, listInvoices, listQuery, payoutsView } from './merchant-api.js';
-import { merchantView, payoutAddressesView } from './panel.js';
+import { dailyStats, merchantView, payoutAddressesView, statsQuery } from './panel.js';
 import { httpError, parse } from './util.js';
 
 const fmt = (asset: string, v: string) => {
@@ -40,6 +40,8 @@ export async function adminRoutes(app: FastifyInstance) {
       ip: req.ip,
     }).catch((err) => req.log.error(err));
   });
+
+  app.get('/stats', async (req) => ({ data: await dailyStats(null, parse(statsQuery, req.query).days) }));
 
   app.get('/audit', async (req) => {
     const q = parse(z.object({ merchant_id: z.string().uuid().optional() }), req.query);
@@ -128,9 +130,17 @@ export async function adminRoutes(app: FastifyInstance) {
         settlement_schedule: z.enum(['daily', 'weekly', 'manual']).optional(),
         settlement_weekday: z.number().int().min(0).max(6).optional(),
         is_active: z.boolean().optional(),
+        allowed_assets: z.array(z.string()).nullable().optional(),
       }),
       req.body,
     );
+    if (b.allowed_assets) {
+      for (const a of b.allowed_assets) invoices.asset(a); // throws for unknown / disabled currencies
+      if (!b.allowed_assets.length) throw httpError(400, 'no_assets', 'Allow at least one currency');
+    }
+    if (b.allowed_assets !== undefined) {
+      await pool.query('UPDATE merchants SET allowed_assets = $2 WHERE id = $1', [req.params.id, b.allowed_assets]);
+    }
     await pool.query(
       `UPDATE merchants SET fee_percent = COALESCE($2, fee_percent), settlement_schedule = COALESCE($3, settlement_schedule),
               settlement_weekday = COALESCE($4, settlement_weekday), is_active = COALESCE($5, is_active)

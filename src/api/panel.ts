@@ -129,6 +129,7 @@ export function merchantView(m: NonNullable<import('fastify').FastifyRequest['me
     settlement_weekday: m.settlement_weekday,
     fee_payer: m.fee_payer,
     totp_enabled: m.totp_enabled,
+    allowed_assets: m.allowed_assets,
     last_settled_at: m.last_settled_at,
     is_active: m.is_active,
     created_at: m.created_at,
@@ -156,8 +157,8 @@ export async function panelRoutes(app: FastifyInstance) {
 
   app.get('/me', async (req) => ({
     merchant: merchantView(req.merchant!),
-    assets: invoices.availableAssets(),
-    asset_settings: await ledger.settings.view(pool, invoices.availableAssets().map((x) => x.id)),
+    assets: await invoices.merchantAssets(req.merchant!.id),
+    asset_settings: await ledger.settings.view(pool, (await invoices.merchantAssets(req.merchant!.id)).map((x) => x.id)),
     settlement_hour_utc: config.SETTLEMENT_HOUR_UTC,
   }));
 
@@ -292,6 +293,8 @@ export async function panelRoutes(app: FastifyInstance) {
     return { ok };
   });
 
+  app.get('/stats', async (req) => ({ data: await dailyStats(req.merchant!.id, parse(statsQuery, req.query).days) }));
+
   app.get('/audit', async (req) => ({ data: await (await import('../services/audit.js')).auditList(pool, { merchantId: req.merchant!.id, limit: 100 }) }));
 }
 
@@ -301,4 +304,21 @@ async function hadAddressBefore(merchantId: string, asset: string): Promise<bool
     [merchantId, asset],
   );
   return rows.length > 0;
+}
+
+export const statsQuery = z.object({ days: z.coerce.number().int().min(7).max(90).default(14) });
+
+/** Paid invoices per UTC day (count, and volume of USD/USDT-priced invoices), zero-filled. */
+export async function dailyStats(merchantId: string | null, days: number) {
+  const { rows } = await pool.query<{ day: string; paid: string; volume: string }>(
+    `SELECT to_char(d, 'YYYY-MM-DD') AS day,
+            COUNT(i.id) AS paid,
+            COALESCE(SUM(i.price_amount) FILTER (WHERE i.price_currency IN ('USD', 'USDT')), 0) AS volume
+     FROM generate_series((now() AT TIME ZONE 'utc')::date - ($1::int - 1), (now() AT TIME ZONE 'utc')::date, interval '1 day') d
+     LEFT JOIN invoices i ON i.status = 'paid' AND (i.paid_at AT TIME ZONE 'utc')::date = d::date
+       AND ($2::uuid IS NULL OR i.merchant_id = $2::uuid)
+     GROUP BY d ORDER BY d`,
+    [days, merchantId],
+  );
+  return rows.map((r) => ({ day: r.day, paid: Number(r.paid), volume: Number(r.volume) }));
 }

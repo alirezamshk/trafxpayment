@@ -119,6 +119,7 @@ export async function buildServer() {
   app.get('/favicon.ico', async (_req, reply) => reply.code(204).send());
   app.get('/assets/app.css', async (_req, reply) => reply.type('text/css').send(page('app.css')));
   app.get('/assets/app.js', async (_req, reply) => reply.type('application/javascript').send(page('app.js')));
+  app.get('/assets/i18n.js', async (_req, reply) => reply.type('application/javascript').send(page('i18n.js')));
 
   return app;
 }

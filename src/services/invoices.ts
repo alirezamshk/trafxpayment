@@ -178,6 +178,7 @@ export class InvoiceService {
     const currency = input.price_currency.trim().toUpperCase();
     if (!/^[A-Z0-9_]{2,12}$/.test(currency)) throw new InvoiceError('Invalid price_currency');
     const asset = input.asset ? this.asset(input.asset) : undefined;
+    if (asset) await this.assertAllowed(merchantId, asset);
     const customerId = input.customer_id?.trim() || null;
     if (customerId && !/^[\w.@:+-]{1,128}$/.test(customerId)) {
       throw new InvoiceError('customer_id must be 1-128 characters: letters, digits, . _ - @ : +');
@@ -230,6 +231,7 @@ export class InvoiceService {
     const asset = this.asset(assetId);
     const current = await this.get(pool, invoiceId);
     if (!current) throw new InvoiceError('Invoice not found', 404, 'not_found');
+    await this.assertAllowed(current.merchant_id, asset);
     if (current.asset) {
       if (current.asset === asset.id) return current;
       throw new InvoiceError('A currency was already selected for this invoice', 409, 'asset_locked');
@@ -285,7 +287,7 @@ export class InvoiceService {
    */
   async payableAssets(inv: InvoiceRow) {
     const out = [];
-    for (const a of this.availableAssets()) {
+    for (const a of await this.merchantAssets(inv.merchant_id)) {
       const asset = this.asset(a.id);
       try {
         const q = await this.quote(asset, inv.price_amount, inv.price_currency, inv.merchant_id, inv.fee_paid_by);
@@ -697,6 +699,20 @@ export class InvoiceService {
         detected_at: d.detected_at.toISOString(),
       })),
     };
+  }
+
+  /** Platform currencies this merchant may accept (all of them unless the admin restricted the list). */
+  async merchantAssets(merchantId: string) {
+    const { rows } = await pool.query<{ allowed_assets: string[] | null }>('SELECT allowed_assets FROM merchants WHERE id = $1', [merchantId]);
+    const allowed = rows[0]?.allowed_assets;
+    const all = this.availableAssets();
+    return allowed ? all.filter((a) => allowed.includes(a.id)) : all;
+  }
+
+  private async assertAllowed(merchantId: string, asset: AssetDef): Promise<void> {
+    if (!(await this.merchantAssets(merchantId)).some((a) => a.id === asset.id)) {
+      throw new InvoiceError(`${asset.id} is not enabled for this merchant account`, 400, 'asset_not_allowed');
+    }
   }
 
   availableAssets() {

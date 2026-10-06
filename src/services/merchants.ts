@@ -16,13 +16,14 @@ export interface Merchant {
   settlement_weekday: number;
   fee_payer: 'merchant' | 'customer';
   totp_enabled: boolean;
+  allowed_assets: string[] | null;
   last_settled_at: Date | null;
   is_active: boolean;
   created_at: Date;
 }
 
 const MERCHANT_COLS = `id, name, email, webhook_url, webhook_secret, fee_percent, settlement_schedule,
-  settlement_weekday, last_settled_at, is_active, created_at, fee_payer, totp_enabled`;
+  settlement_weekday, last_settled_at, is_active, created_at, fee_payer, totp_enabled, allowed_assets`;
 
 export function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
