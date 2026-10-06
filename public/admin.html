@@ -3,201 +3,255 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>مدیریت درگاه</title>
+<title>مدیریت — TrafxPayment</title>
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-<div class="wrap">
-  <div id="login" class="card narrow hidden" style="margin:40px auto">
-    <h1>ورود مدیر</h1>
-    <form id="loginForm">
-      <label>ایمیل</label><input name="email" type="email" class="ltr" required autocomplete="username">
-      <label>رمز عبور</label><input name="password" type="password" class="ltr" required autocomplete="current-password">
-      <div id="loginMsg"></div><p><button>ورود</button></p>
-    </form>
-  </div>
-  <div id="app" class="hidden">
-    <div class="topbar"><h1>مدیریت درگاه</h1><button class="secondary small" id="logout">خروج</button></div>
-    <nav class="tabs" id="tabs"></nav>
-    <div id="view"></div>
-  </div>
-</div>
 <script src="/assets/app.js"></script>
 <script>
-const view = () => $('#view');
-let summary;
+'use strict';
+let admin, shell;
 
-async function boot() {
-  try { summary = await api('GET', '/api/admin/summary'); }
-  catch { $('#login').classList.remove('hidden'); return; }
-  $('#login').classList.add('hidden');
-  $('#app').classList.remove('hidden');
-  tabs($('#tabs'), [['summary', 'خلاصه'], ['merchants', 'پذیرندگان'], ['payouts', 'تسویه‌ها'], ['invoices', 'فاکتورها'], ['unmatched', 'واریزهای نامشخص'], ['assets', 'تنظیمات ارزها'], ['webhooks', 'وبهوک‌های ناموفق']],
-    (t) => VIEWS[t]().catch((e) => showMsg(view(), e.message)));
+async function start() {
+  try { admin = await api('GET', '/api/admin/me'); }
+  catch {
+    await loginScreen({
+      title: 'ورود مدیر', role: 'admin',
+      subtitle: 'مدیریت درگاه، پذیرندگان و تسویه‌ها',
+      features: ['تایید و رد تسویه‌ها', 'تنظیم کارمزد هر پذیرنده', 'کنترل کیف داغ و سرد', 'گزارش کامل وقایع'],
+    });
+    admin = await api('GET', '/api/admin/me');
+  }
+  shell = createShell({
+    product: 'TrafxPayment', subtitle: 'پنل مدیریت',
+    user: { name: admin.email, role: 'مدیر' },
+    onLogout: async () => { await api('POST', '/api/auth/logout'); location.reload(); },
+    nav: [
+      { id: 'overview', label: 'نمای کلی', icon: 'dashboard' },
+      { id: 'merchants', label: 'پذیرندگان', icon: 'users' },
+      { id: 'payouts', label: 'تسویه‌ها', icon: 'payout' },
+      { id: 'invoices', label: 'فاکتورها', icon: 'invoice' },
+      { id: 'unmatched', label: 'واریزهای نامشخص', icon: 'alert' },
+      { section: 'سیستم' },
+      { id: 'assets', label: 'تنظیمات ارزها', icon: 'coins' },
+      { id: 'webhooks', label: 'وبهوک‌های ناموفق', icon: 'bolt' },
+      { id: 'audit', label: 'گزارش وقایع', icon: 'list' },
+      { id: 'account', label: 'امنیت حساب', icon: 'shield' },
+    ],
+    views: VIEWS,
+  });
+  refreshCounts();
 }
-$('#loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  try { await api('POST', '/api/auth/login', { ...formData(e.target), role: 'admin' }); boot(); }
-  catch (err) { showMsg($('#loginMsg'), err.message); }
-});
-$('#logout').addEventListener('click', async () => { await api('POST', '/api/auth/logout'); location.reload(); });
+
+async function refreshCounts() {
+  try {
+    const s = await api('GET', '/api/admin/summary');
+    shell.setCount('payouts', s.payouts_pending_approval);
+    shell.setCount('unmatched', s.unmatched_deposits);
+  } catch { /* ignore */ }
+}
 
 const VIEWS = {
-  async summary() {
-    summary = await api('GET', '/api/admin/summary');
-    const c = summary.invoices_30d;
-    view().innerHTML = `
-      <div class="grid">
-        <div class="stat"><span class="muted">پرداخت‌شده (۳۰ روز)</span><b>${c.paid || 0}</b></div>
-        <div class="stat"><span class="muted">در انتظار/تایید</span><b>${(c.pending || 0) + (c.confirming || 0)}</b></div>
-        <div class="stat"><span class="muted">تسویه منتظر تایید</span><b>${summary.payouts_pending_approval}</b></div>
-        <div class="stat"><span class="muted">واریز نامشخص</span><b>${summary.unmatched_deposits}</b></div>
-      </div><br>
-      <div class="card"><h2>درآمد و بدهی به پذیرندگان</h2>
-        ${table(['ارز', 'حجم کل دریافتی', 'درآمد کارمزد شما', 'کارمزد شبکه تسویه', 'بدهی به پذیرندگان'], summary.assets.map((a) => [esc(a.asset), `<span class="mono">${esc(a.volume)}</span>`, `<b class="mono">${esc(a.platform_fees)}</b>`, `<span class="mono">${esc(a.payout_fees)}</span>`, `<span class="mono">${esc(a.merchant_balances)}</span>`]))}
-        <p class="small muted">«بدهی به پذیرندگان» مبلغی است که باید در کیف پول داغ برای تسویه موجود باشد.</p></div>
-      <div class="card"><h2>شبکه‌های فعال</h2><p>${summary.available_assets.map((a) => `<span class="badge">${esc(a.id)}</span>`).join(' ') || 'هیچ'}</p></div>`;
+  async overview(el, ctx) {
+    const s = await api('GET', '/api/admin/summary');
+    const c = s.invoices_30d;
+    const stable = (k) => s.assets.filter((a) => a.asset.startsWith('USDT')).reduce((t, a) => t + Number(a[k] || 0), 0);
+    ctx.setHeader('نمای کلی', '۳۰ روز اخیر و وضعیت کل حساب‌ها');
+    el.innerHTML = `
+      ${admin.totp_enabled ? '' : alertBox('warn', 'تایید دومرحله‌ای حساب مدیر <b>فعال نیست</b>. هر کسی رمز شما را داشته باشد می‌تواند تسویه تایید کند. <a href="#account">فعال‌سازی</a>') + '<div style="height:16px"></div>'}
+      <div class="grid grid-4" style="margin-bottom:18px">
+        ${kpi({ label: 'درآمد کارمزد (USDT)', value: fmtAmount(stable('platform_fees').toFixed(2), 2), ico: 'coins', tone: 'ok', hint: `+ ${fmtAmount(stable('network_fees').toFixed(2), 2)} کارمزد شبکه` })}
+        ${kpi({ label: 'حجم دریافتی (USDT)', value: fmtAmount(stable('volume').toFixed(2), 2), ico: 'trend' })}
+        ${kpi({ label: 'تسویه منتظر تایید', value: s.payouts_pending_approval, ico: 'clock', tone: s.payouts_pending_approval ? 'warn' : '', hint: '<a href="#payouts">بررسی</a>' })}
+        ${kpi({ label: 'واریز نامشخص', value: s.unmatched_deposits, ico: 'alert', tone: s.unmatched_deposits ? 'err' : '', hint: '<a href="#unmatched">بررسی</a>' })}
+      </div>
+      <div class="grid grid-4" style="margin-bottom:18px">
+        ${kpi({ label: 'پرداخت‌شده', value: c.paid || 0, ico: 'checkCircle', tone: 'ok', hint: '۳۰ روز' })}
+        ${kpi({ label: 'در انتظار / تایید', value: (c.pending || 0) + (c.confirming || 0), ico: 'clock', hint: '۳۰ روز' })}
+        ${kpi({ label: 'ناقص', value: c.partially_paid || 0, ico: 'alert', tone: 'warn', hint: '۳۰ روز' })}
+        ${kpi({ label: 'منقضی / لغو', value: (c.expired || 0) + (c.cancelled || 0), ico: 'x', hint: '۳۰ روز' })}
+      </div>
+      ${card({ title: 'وضعیت ارزها', desc: '«بدهی به پذیرندگان» حداقل مبلغی است که باید در کیف داغ + آدرس‌های واریز باشد', flush: true,
+        body: table(['ارز', 'حجم کل دریافتی', 'کارمزد درگاه', 'کارمزد شبکه واریز', 'کارمزد شبکه تسویه', 'بدهی به پذیرندگان'], s.assets.map((a) => [assetLabel(a.asset), num(fmtAmount(a.volume)), `<b class="num" style="color:var(--ok)">${fmtAmount(a.platform_fees)}</b>`, num(fmtAmount(a.network_fees)), num(fmtAmount(a.payout_fees)), `<b class="num">${fmtAmount(a.merchant_balances)}</b>`]), { empty: 'هنوز تراکنشی نیست' }) })}
+      ${card({ title: 'شبکه‌های فعال', body: `<div class="row">${s.available_assets.map((a) => `<span class="badge b-info">${esc(a.symbol)} · ${esc(a.network_name)}</span>`).join('') || '<span class="muted">هیچ</span>'}</div>` })}`;
+    refreshCounts();
   },
 
-  async merchants() {
+  async merchants(el, ctx) {
+    ctx.setHeader('پذیرندگان', '', `<button class="btn" id="new-m">${icon('plus')}پذیرنده جدید</button>`);
     const r = await api('GET', '/api/admin/merchants');
-    view().innerHTML = `
-      <div class="card"><h2>پذیرنده جدید</h2>
-        <form id="mForm" class="grid">
-          <div><label>نام</label><input name="name" required></div>
-          <div><label>ایمیل</label><input name="email" type="email" class="ltr" required></div>
-          <div><label>رمز اولیه</label><input name="password" class="ltr" required minlength="10"></div>
-          <div><label>کارمزد ٪</label><input name="fee_percent" class="ltr" value="1"></div>
-          <div style="align-self:end"><button>ساخت</button></div>
-        </form><div id="mMsg"></div></div>
-      <div class="card"><h2>پذیرندگان</h2>${table(['نام', 'ایمیل', 'کارمزد', 'تسویه', 'وضعیت', ''], r.data.map((m) => [
-        esc(m.name), `<span class="mono">${esc(m.email)}</span>`, `${esc(m.fee_percent)}٪`,
-        SCHEDULE_FA[m.settlement_schedule] + (m.settlement_schedule === 'weekly' ? ' — ' + WEEKDAYS_FA[m.settlement_weekday] : ''),
-        m.is_active ? '<span class="badge s-paid">فعال</span>' : '<span class="badge s-cancelled">غیرفعال</span>',
-        `<button class="small secondary" data-open="${esc(m.id)}">مدیریت</button>`]))}</div>
-      <div id="detail"></div>`;
-    $('#mForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const d = formData(e.target);
+    el.innerHTML = card({ flush: true, body: table(['پذیرنده', 'کارمزد', 'پرداخت کارمزد شبکه', 'تسویه', '2FA', 'وضعیت', ''], r.data.map((m) => [
+      `<b>${esc(m.name)}</b><div class="small muted mono">${esc(m.email)}</div>`,
+      `<b class="num">${esc(String(m.fee_percent).replace(/\.?0+$/, ''))}٪</b>`,
+      m.fee_payer === 'customer' ? 'مشتری' : 'پذیرنده',
+      SCHEDULE[m.settlement_schedule] + (m.settlement_schedule === 'weekly' ? ` · ${WEEKDAYS[m.settlement_weekday]}` : ''),
+      m.totp_enabled ? '<span class="badge b-ok">فعال</span>' : '<span class="badge b-muted">خاموش</span>',
+      m.is_active ? '<span class="badge b-ok">فعال</span>' : '<span class="badge b-err">مسدود</span>',
+      `<button class="btn sm secondary" data-m="${esc(m.id)}">مدیریت</button>`,
+    ]), { empty: 'هنوز پذیرنده‌ای ندارید', emptyIcon: 'users' }) });
+    $('#new-m').onclick = async () => {
+      const d = await modal({
+        title: 'پذیرنده جدید', ico: 'users',
+        body: `<form id="mf" class="stack">${field('نام کسب‌وکار', '<input name="name" required>')}${field('ایمیل ورود', '<input name="email" type="email" class="ltr" required>')}
+          <div class="grid grid-2">${field('رمز اولیه', '<input name="password" class="ltr" minlength="10" required>', 'حداقل ۱۰ کاراکتر')}${field('کارمزد ٪', '<input name="fee_percent" class="ltr" value="1">')}</div></form>`,
+        buttons: [{ label: 'انصراف', value: null }, { label: 'ساخت', value: (w) => formData($('#mf', w)) }],
+      });
+      if (!d) return;
       try {
         const res = await api('POST', '/api/admin/merchants', { ...d, fee_percent: Number(d.fee_percent) });
-        $('#mMsg').innerHTML = `<div class="alert ok">ساخته شد. کلید API اولیه (فقط یک بار نمایش داده می‌شود):</div>${copyBox(res.api_key)}`;
-      } catch (err) { showMsg($('#mMsg'), err.message); }
-    });
-    view().querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => merchantDetail(b.dataset.open)));
+        await modal({ title: 'پذیرنده ساخته شد', ico: 'checkCircle', body: `<p>این اطلاعات را به پذیرنده بدهید:</p>
+          <div class="stack small"><div>پنل: ${copyField(location.origin + '/panel')}</div><div>ایمیل: ${copyField(d.email)}</div><div>کلید API (فقط یک بار نمایش داده می‌شود): ${copyField(res.api_key)}</div></div>`, buttons: [{ label: 'بستن', value: null }] });
+        VIEWS.merchants(el, ctx);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    $$('[data-m]', el).forEach((b) => b.addEventListener('click', () => merchantDetail(b.dataset.m, () => VIEWS.merchants(el, ctx))));
   },
 
-  async payouts() {
-    const status = $('#pStatus')?.value ?? 'pending_approval';
+  async payouts(el, ctx, status = 'pending_approval') {
+    ctx?.setHeader('تسویه‌ها', 'تایید شما = ارسال خودکار از کیف داغ', `<button class="btn secondary" id="run-s">${icon('refresh')}اجرای تسویه‌های سررسید</button>`);
+    if (ctx) $('#run-s').onclick = (e) => busy(e.currentTarget, async () => { const x = await api('POST', '/api/admin/settlements/run'); toast(`${x.data.length} تسویه ساخته شد`); VIEWS.payouts(el, null, status); });
     const r = await api('GET', `/api/admin/payouts${status ? '?status=' + status : ''}`);
-    view().innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">تسویه‌ها</h2>
-        <select id="pStatus" style="max-width:220px"><option value="">همه</option>${['pending_approval', 'approved', 'sending', 'sent', 'completed', 'failed', 'rejected'].map((s) => `<option value="${s}" ${s === status ? 'selected' : ''}>${STATUS_FA[s]}</option>`).join('')}</select>
-        <button class="secondary small" id="runSettle">اجرای تسویه‌های سررسید</button></div><div id="pMsg"></div><br>
-      ${table(['تاریخ', 'پذیرنده', 'ارز', 'مبلغ', 'کارمزد شبکه', 'آدرس', 'وضعیت', 'تراکنش / خطا', ''], r.data.map((p) => [
-        fmtDate(p.created_at), esc(p.merchant_name), esc(p.asset), `<b class="mono">${esc(p.amount)}</b>`, `<span class="mono">${esc(p.fee)}</span>`, copyBox(p.address), badge(p.status),
-        `<span class="mono small">${esc(p.tx_hash ? short(p.tx_hash) : '')}</span> <span class="small" style="color:var(--err)">${esc(p.error || '')}</span>`,
-        (p.status === 'pending_approval' ? `<button class="small" data-approve="${esc(p.id)}">تایید</button> ` : '') +
-        (['pending_approval', 'approved', 'sending'].includes(p.status) ? `<button class="small danger" data-reject="${esc(p.id)}">رد</button>` : '')]))}</div>`;
-    $('#pStatus').addEventListener('change', () => VIEWS.payouts());
-    $('#runSettle').addEventListener('click', async () => { const x = await api('POST', '/api/admin/settlements/run'); showMsg($('#pMsg'), `${x.data.length} تسویه ساخته شد`, 'ok'); setTimeout(VIEWS.payouts, 800); });
-    view().querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
-      if (confirm('این تسویه از کیف پول داغ ارسال شود؟')) { await api('POST', `/api/admin/payouts/${b.dataset.approve}/approve`); VIEWS.payouts(); }
+    const tabs = [['pending_approval', 'منتظر تایید'], ['approved', 'تایید شده'], ['sending', 'در حال ارسال'], ['sent', 'ارسال شده'], ['completed', 'تکمیل'], ['failed', 'ناموفق'], ['', 'همه']];
+    el.innerHTML = card({ flush: true, body: `<div class="tabs" style="padding:0 12px;margin:0">${tabs.map(([k, t]) => `<button data-st="${k}" class="${k === status ? 'active' : ''}">${t}</button>`).join('')}</div>
+      ${table(['پذیرنده', 'ارز', 'مبلغ', 'کارمزد شبکه', 'مقصد', 'وضعیت', 'تراکنش / خطا', ''], r.data.map((p) => [
+        `<b>${esc(p.merchant_name)}</b><div class="small muted">${fmtDate(p.created_at)}</div>`, assetLabel(p.asset), `<b class="num">${fmtAmount(p.amount)}</b>`, num(fmtAmount(p.fee)),
+        `<span class="mono small" title="${esc(p.address)}">${esc(short(p.address, 8))}</span> <button class="btn sm ghost icon" data-copy="${esc(p.address)}">${icon('copy')}</button>`,
+        badge(p.status),
+        `${p.tx_hash ? `<span class="mono small">${esc(short(p.tx_hash, 8))}</span>` : ''}${p.error ? `<div class="small" style="color:var(--err);white-space:normal;max-width:260px">${esc(p.error)}</div>` : ''}`,
+        `<div class="row" style="flex-wrap:nowrap">${p.status === 'pending_approval' ? `<button class="btn sm success" data-approve="${esc(p.id)}">تایید</button>` : ''}${['pending_approval', 'approved', 'sending'].includes(p.status) ? `<button class="btn sm danger soft" data-reject="${esc(p.id)}">رد</button>` : ''}</div>`,
+      ]), { empty: 'تسویه‌ای در این وضعیت نیست', emptyIcon: 'payout' })}` });
+    $$('[data-st]', el).forEach((b) => b.addEventListener('click', () => VIEWS.payouts(el, null, b.dataset.st)));
+    $$('[data-approve]', el).forEach((b) => b.addEventListener('click', async () => {
+      const p = r.data.find((x) => x.id === b.dataset.approve);
+      if (!(await confirmDialog('تایید تسویه', `${fmtAmount(p.amount)} ${esc(p.asset)} به <span class="mono">${esc(p.address)}</span> ارسال شود؟ این کار برگشت‌پذیر نیست.`, { ok: 'تایید و ارسال' }))) return;
+      await busy(b, async () => { await api('POST', `/api/admin/payouts/${p.id}/approve`); toast('تایید شد؛ تا چند ثانیه ارسال می‌شود'); VIEWS.payouts(el, null, status); refreshCounts(); });
     }));
-    view().querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
-      const reason = prompt('دلیل رد (مبلغ به موجودی پذیرنده برمی‌گردد). برای «در حال ارسال» ابتدا در اکسپلورر مطمئن شوید تراکنش ثبت نشده است.');
-      if (reason !== null) { try { await api('POST', `/api/admin/payouts/${b.dataset.reject}/reject`, { reason: reason || 'rejected by admin' }); VIEWS.payouts(); } catch (e) { alert(e.message); } }
+    $$('[data-reject]', el).forEach((b) => b.addEventListener('click', async () => {
+      const reason = await promptDialog('رد تسویه', { label: 'دلیل', value: 'rejected by admin', help: 'مبلغ به موجودی پذیرنده برمی‌گردد. برای «در حال ارسال» اول در اکسپلورر مطمئن شوید تراکنش ثبت نشده.' });
+      if (reason === null) return;
+      await busy(b, async () => { await api('POST', `/api/admin/payouts/${b.dataset.reject}/reject`, { reason: reason || 'rejected by admin' }); toast('رد شد'); VIEWS.payouts(el, null, status); refreshCounts(); });
     }));
   },
 
-  async invoices() {
-    const status = $('#iStatus')?.value ?? '';
+  async invoices(el, ctx, status = '') {
+    ctx?.setHeader('فاکتورها');
     const r = await api('GET', `/api/admin/invoices?limit=100${status ? '&status=' + status : ''}`);
-    view().innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">فاکتورها</h2>
-      <select id="iStatus" style="max-width:220px"><option value="">همه</option>${['pending', 'confirming', 'partially_paid', 'paid', 'expired', 'cancelled'].map((s) => `<option value="${s}" ${s === status ? 'selected' : ''}>${STATUS_FA[s]}</option>`).join('')}</select></div><br>
-      ${table(['تاریخ', 'مبلغ', 'ارز', 'لازم', 'دریافتی', 'کارمزد', 'وضعیت', ''], r.data.map((i) => [
-        fmtDate(i.created_at), `${esc(i.price_amount)} ${esc(i.price_currency)}`, esc(i.asset || '—'), `<span class="mono">${esc(i.pay_amount || '—')}</span>`,
-        `<span class="mono">${esc(i.amount_received || '—')}</span>`, `<span class="mono">${esc(i.fee_amount || '—')}</span>`, badge(i.status) + (i.is_late ? ' <span class="badge s-pending">دیرهنگام</span>' : ''),
-        `<a href="${esc(i.payment_url)}" target="_blank">مشاهده</a>` + (['partially_paid', 'expired'].includes(i.status) && Number(i.amount_received) > 0 ? ` <button class="small secondary" data-paid="${esc(i.id)}">قبول به‌عنوان پرداخت</button>` : '')]))}</div>`;
-    $('#iStatus').addEventListener('change', () => VIEWS.invoices());
-    view().querySelectorAll('[data-paid]').forEach((b) => b.addEventListener('click', async () => {
-      if (confirm('مبلغ دریافتی (کمتر از فاکتور) به‌عنوان پرداخت کامل پذیرفته و به حساب پذیرنده واریز شود؟')) { await api('POST', `/api/admin/invoices/${b.dataset.paid}/mark-paid`); VIEWS.invoices(); }
+    const tabs = [['', 'همه'], ['paid', 'پرداخت شده'], ['pending', 'در انتظار'], ['confirming', 'در حال تایید'], ['partially_paid', 'ناقص'], ['expired', 'منقضی']];
+    el.innerHTML = card({ flush: true, body: `<div class="tabs" style="padding:0 12px;margin:0">${tabs.map(([k, t]) => `<button data-st="${k}" class="${k === status ? 'active' : ''}">${t}</button>`).join('')}</div>
+      ${table(['مبلغ', 'ارز', 'لازم', 'دریافتی', 'کارمزد', 'وضعیت', 'تاریخ', ''], r.data.map((i) => [
+        `<b>${fmtAmount(i.price_amount, 2)} ${esc(i.price_currency)}</b>`, i.asset ? assetLabel(i.asset) : '—', num(fmtAmount(i.pay_amount)), num(fmtAmount(i.amount_received)), num(fmtAmount(i.fee_amount)),
+        badge(i.status) + (i.is_late ? ' <span class="badge plain b-warn">دیرهنگام</span>' : ''), `<span class="small">${fmtDate(i.created_at)}</span>`,
+        `<div class="row" style="flex-wrap:nowrap"><a class="btn sm ghost icon" href="${esc(i.payment_url)}" target="_blank">${icon('external')}</a>${['partially_paid', 'expired'].includes(i.status) && Number(i.amount_received) > 0 ? `<button class="btn sm secondary" data-paid="${esc(i.id)}">قبول</button>` : ''}</div>`,
+      ]), { empty: 'فاکتوری نیست' })}` });
+    $$('[data-st]', el).forEach((b) => b.addEventListener('click', () => VIEWS.invoices(el, null, b.dataset.st)));
+    $$('[data-paid]', el).forEach((b) => b.addEventListener('click', async () => {
+      if (!(await confirmDialog('قبول به‌عنوان پرداخت', 'مبلغ دریافتی (کمتر از فاکتور) به‌عنوان پرداخت کامل پذیرفته و به حساب پذیرنده واریز شود؟'))) return;
+      await busy(b, async () => { await api('POST', `/api/admin/invoices/${b.dataset.paid}/mark-paid`); toast('ثبت شد'); VIEWS.invoices(el, null, status); });
     }));
   },
 
-  async unmatched() {
+  async unmatched(el, ctx) {
+    ctx.setHeader('واریزهای نامشخص', 'واریزهایی که به فاکتوری وصل نشدند');
     const r = await api('GET', '/api/admin/deposits/unmatched');
-    view().innerHTML = `<div class="card"><h2>واریزهای نامشخص</h2><p class="muted small">واریزهایی که به فاکتوری نسبت داده نشدند (ارز یا شبکه اشتباه، کامنت TON نادرست). پس از بررسی، با «اصلاحیه موجودی» در بخش پذیرندگان رسیدگی کنید.</p>
-      ${table(['تاریخ', 'شبکه', 'ارز', 'مبلغ', 'از', 'به', 'Memo', 'تراکنش'], r.data.map((d) => [fmtDate(d.detected_at), esc(d.chain), esc(d.asset), `<span class="mono">${esc(d.amount)}</span>`,
-        `<span class="mono">${esc(short(d.from_address))}</span>`, `<span class="mono">${esc(short(d.to_address))}</span>`, `<span class="mono">${esc(d.memo || '')}</span>`, copyBox(d.tx_hash)]))}</div>`;
+    el.innerHTML = `${alertBox('info', 'دلایل رایج: ارز یا شبکه اشتباه، یا ننوشتن کامنت (Memo) در TON. پس از بررسی، از «پذیرندگان ← مدیریت ← اصلاحیه موجودی» رسیدگی کنید.')}<div style="height:14px"></div>
+      ${card({ flush: true, body: table(['زمان', 'شبکه', 'ارز', 'مبلغ', 'از', 'به', 'Memo', 'تراکنش'], r.data.map((d) => [
+        fmtDate(d.detected_at), esc(NETWORK[d.chain] || d.chain), assetLabel(d.asset), `<b class="num">${fmtAmount(d.amount)}</b>`,
+        `<span class="mono small">${esc(short(d.from_address))}</span>`, `<span class="mono small">${esc(short(d.to_address))}</span>`, `<span class="mono small">${esc(d.memo || '—')}</span>`,
+        `<span class="mono small">${esc(short(d.tx_hash, 8))}</span> <button class="btn sm ghost icon" data-copy="${esc(d.tx_hash)}">${icon('copy')}</button>`,
+      ]), { empty: 'واریز نامشخصی نیست', emptyIcon: 'checkCircle' }) })}`;
   },
 
-  async assets() {
+  async assets(el, ctx) {
+    ctx.setHeader('تنظیمات ارزها', 'هزینه، حداقل‌ها و کیف داغ برای هر ارز');
     const r = await api('GET', '/api/admin/asset-settings');
-    const F = [['min_amount', 'حداقل مبلغ فاکتور'], ['deposit_fee', 'کارمزد شبکه واریز'], ['sweep_threshold', 'حد sweep'], ['payout_fee', 'کارمزد شبکه تسویه'], ['hot_max', 'سقف کیف داغ']];
-    view().innerHTML = `<div class="card"><h2>تنظیمات ارزها</h2>
-      <p class="muted small">
-      <b>حداقل مبلغ فاکتور:</b> فاکتورهای کوچک‌تر این شبکه را نمی‌بینند. <b>کارمزد شبکه واریز:</b> از هر پرداخت؛ بسته به تنظیم پذیرنده به مبلغ مشتری اضافه یا از سهم پذیرنده کم می‌شود.
-      <b>حد sweep:</b> انتقال یک‌جای پول آدرس‌ها به کیف داغ بعد از رسیدن به این مقدار. <b>کارمزد شبکه تسویه:</b> از هر تسویه پذیرنده. <b>سقف کیف داغ:</b> مازاد به کیف سرد منتقل می‌شود.</p>
-      ${table(['ارز', ...F.map((f) => f[1]), ''], r.data.map((a) => [esc(a.asset),
-        ...F.map(([k]) => `<input class="ltr" style="max-width:110px" data-k="${k}" data-a="${esc(a.asset)}" value="${esc(a[k])}">`),
-        `<button class="small" data-save="${esc(a.asset)}">ذخیره</button>`]))}
-      <div id="asMsg"></div></div>`;
-    view().querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
-      const a = b.dataset.save;
-      const body = { asset: a };
-      view().querySelectorAll(`[data-a="${a}"]`).forEach((i) => (body[i.dataset.k] = i.value.trim()));
-      try { await api('PUT', '/api/admin/asset-settings', body); showMsg($('#asMsg'), `${a} ذخیره شد`, 'ok'); }
-      catch (e) { showMsg($('#asMsg'), e.message); }
-    }));
+    const F = [
+      ['min_amount', 'حداقل مبلغ فاکتور', 'فاکتورهای کوچک‌تر این شبکه را نمی‌بینند'],
+      ['deposit_fee', 'کارمزد شبکه واریز', 'برای هر پرداخت؛ از مشتری یا پذیرنده'],
+      ['sweep_threshold', 'حد sweep', 'جمع‌آوری یک‌جای پول آدرس‌ها'],
+      ['payout_fee', 'کارمزد شبکه تسویه', 'از هر تسویه پذیرنده'],
+      ['hot_max', 'سقف کیف داغ', 'مازاد به کیف سرد می‌رود'],
+    ];
+    el.innerHTML = `<div class="grid grid-2">${r.data.map((a) => card({
+      title: assetLabel(a.asset), actions: `<button class="btn sm" data-save="${esc(a.asset)}">ذخیره</button>`,
+      body: `<div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${F.map(([k, t, h]) => field(t, `<input class="ltr" data-a="${esc(a.asset)}" data-k="${k}" value="${esc(a[k])}">`, h)).join('')}</div>`,
+    })).join('')}</div>`;
+    $$('[data-save]', el).forEach((b) => b.addEventListener('click', () => busy(b, async () => {
+      const body = { asset: b.dataset.save };
+      $$(`[data-a="${b.dataset.save}"]`, el).forEach((i) => (body[i.dataset.k] = i.value.trim()));
+      await api('PUT', '/api/admin/asset-settings', body);
+      toast(`${b.dataset.save} ذخیره شد`);
+    })));
   },
 
-  async webhooks() {
+  async webhooks(el, ctx) {
+    ctx.setHeader('وبهوک‌های ناموفق', 'رویدادهایی که به سایت پذیرنده نرسیدند');
     const r = await api('GET', '/api/admin/webhooks/failed');
-    view().innerHTML = `<div class="card"><h2>وبهوک‌های ناموفق</h2>${table(['تاریخ', 'رویداد', 'تلاش', 'خطا', ''], r.data.map((w) => [fmtDate(w.created_at), esc(w.event), w.attempts, esc(w.last_error || ''), `<button class="small secondary" data-retry="${esc(w.id)}">ارسال مجدد</button>`]))}</div>`;
-    view().querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('click', async () => { await api('POST', `/api/admin/webhooks/${b.dataset.retry}/retry`); VIEWS.webhooks(); }));
+    el.innerHTML = card({ flush: true, body: table(['زمان', 'رویداد', 'تلاش', 'آخرین خطا', ''], r.data.map((w) => [
+      fmtDate(w.created_at), `<span class="mono small">${esc(w.event)}</span>`, num(w.attempts), `<span class="small" style="color:var(--err)">${esc(w.last_error || '')}</span>`,
+      `<button class="btn sm secondary" data-retry="${esc(w.id)}">${icon('refresh')}ارسال مجدد</button>`,
+    ]), { empty: 'همه وبهوک‌ها تحویل شده‌اند', emptyIcon: 'checkCircle' }) });
+    $$('[data-retry]', el).forEach((b) => b.addEventListener('click', () => busy(b, async () => { await api('POST', `/api/admin/webhooks/${b.dataset.retry}/retry`); toast('در صف ارسال'); VIEWS.webhooks(el, ctx); })));
+  },
+
+  async audit(el, ctx) {
+    ctx.setHeader('گزارش وقایع', 'ورودها، تغییرات امنیتی و همه کارهای مدیر');
+    el.innerHTML = card({ flush: true, body: auditTable((await api('GET', '/api/admin/audit')).data) });
+  },
+
+  async account(el, ctx) {
+    ctx.setHeader('امنیت حساب مدیر');
+    el.innerHTML = card({ title: 'تایید دومرحله‌ای (2FA)', desc: 'وقتی فعال است، هر تغییر در پنل مدیر (تایید تسویه، کارمزد، …) کد می‌خواهد', body: '<div id="tfa"></div>' });
+    await twoFactorSection($('#tfa'), '/api/admin', async () => { admin = await api('GET', '/api/admin/me'); VIEWS.account(el, ctx); });
   },
 };
 
-async function merchantDetail(id) {
+async function merchantDetail(id, onChange) {
   const d = await api('GET', `/api/admin/merchants/${id}`);
   const m = d.merchant;
-  $('#detail').innerHTML = `<div class="card"><h2>${esc(m.name)}</h2>
-    <form id="editM" class="grid">
-      <div><label>کارمزد ٪</label><input name="fee_percent" class="ltr" value="${esc(m.fee_percent)}"></div>
-      <div><label>زمان‌بندی تسویه</label><select name="settlement_schedule">${Object.entries(SCHEDULE_FA).map(([k, v]) => `<option value="${k}" ${k === m.settlement_schedule ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div><label>روز هفتگی</label><select name="settlement_weekday">${WEEKDAYS_FA.map((x, i) => `<option value="${i}" ${i === m.settlement_weekday ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-      <div><label>وضعیت</label><select name="is_active"><option value="true" ${m.is_active ? 'selected' : ''}>فعال</option><option value="false" ${!m.is_active ? 'selected' : ''}>غیرفعال</option></select></div>
-      <div style="align-self:end"><button>ذخیره</button></div>
-    </form><div id="eMsg"></div>
-    <h3>موجودی</h3>${table(['ارز', 'موجودی'], d.balances.map((b) => [esc(b.asset), `<b class="mono">${esc(b.balance)}</b>`]))}
-    <h3>آدرس‌های تسویه</h3>${table(['ارز', 'آدرس', 'حداقل'], d.payout_addresses.map((a) => [esc(a.asset), `<span class="mono">${esc(a.address)}</span>`, `<span class="mono">${esc(a.min_amount)}</span>`]))}
-    <p><button class="secondary" id="settleNow">تسویه فوری همه ارزها</button></p>
-    <h3>اصلاحیه موجودی</h3>
-    <form id="adj" class="grid"><div><label>ارز</label><select name="asset">${summary.available_assets.map((a) => `<option>${esc(a.id)}</option>`).join('')}</select></div>
-      <div><label>مبلغ (منفی برای کسر)</label><input name="amount" class="ltr" required></div><div><label>توضیح</label><input name="note" required></div>
-      <div style="align-self:end"><button>ثبت</button></div></form><div id="adjMsg"></div></div>`;
-  $('#editM').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const f = formData(e.target);
-    try {
-      await api('PATCH', `/api/admin/merchants/${id}`, { fee_percent: Number(f.fee_percent), settlement_schedule: f.settlement_schedule, settlement_weekday: Number(f.settlement_weekday), is_active: f.is_active === 'true' });
-      showMsg($('#eMsg'), 'ذخیره شد', 'ok');
-    } catch (err) { showMsg($('#eMsg'), err.message); }
+  const result = await modal({
+    title: m.name, ico: 'users',
+    body: `<div style="max-height:65vh;overflow:auto" class="stack">
+      <form id="em" class="grid grid-2">
+        ${field('کارمزد ٪', `<input name="fee_percent" class="ltr" value="${esc(String(m.fee_percent).replace(/\.?0+$/, ''))}">`)}
+        ${field('وضعیت', `<select name="is_active"><option value="true" ${m.is_active ? 'selected' : ''}>فعال</option><option value="false" ${m.is_active ? '' : 'selected'}>مسدود</option></select>`)}
+        ${field('زمان‌بندی تسویه', `<select name="settlement_schedule">${Object.entries(SCHEDULE).map(([k, v]) => `<option value="${k}" ${k === m.settlement_schedule ? 'selected' : ''}>${v}</option>`).join('')}</select>`)}
+        ${field('روز هفتگی', `<select name="settlement_weekday">${WEEKDAYS.map((x, i) => `<option value="${i}" ${i === m.settlement_weekday ? 'selected' : ''}>${x}</option>`).join('')}</select>`)}
+      </form>
+      <h3>موجودی</h3>${table(['ارز', 'موجودی'], d.balances.map((b) => [assetLabel(b.asset), `<b class="num">${fmtAmount(b.balance)}</b>`]), { empty: 'موجودی ندارد' })}
+      <h3>آدرس‌های تسویه</h3>${table(['ارز', 'آدرس'], d.payout_addresses.map((a) => [assetLabel(a.asset), `<span class="mono small">${esc(a.address)}</span>${a.locked_until && new Date(a.locked_until) > new Date() ? ' <span class="badge b-warn">در دوره انتظار</span>' : ''}`]), { empty: 'آدرسی ثبت نشده' })}
+      <div class="row"><button type="button" class="btn sm secondary" data-act="settle">${icon('payout')}تسویه فوری</button><button type="button" class="btn sm secondary" data-act="adjust">اصلاحیه موجودی</button>${m.totp_enabled ? '<button type="button" class="btn sm danger soft" data-act="reset2fa">ریست 2FA</button>' : ''}</div>
+    </div>`,
+    buttons: [{ label: 'بستن', value: null }, { label: 'ذخیره تغییرات', value: (w) => formData($('#em', w)) }],
+    onOpen: (w) => w.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      if (b.dataset.act === 'settle' && await confirmDialog('تسویه فوری', 'برای همه ارزهای دارای آدرس، تسویه (بدون توجه به حداقل) ساخته شود؟')) {
+        busy(b, async () => { const r = await api('POST', `/api/admin/merchants/${id}/settle`); toast(`${r.data.length} تسویه ساخته شد`); refreshCounts(); });
+      }
+      if (b.dataset.act === 'reset2fa' && await confirmDialog('ریست 2FA', 'تایید دومرحله‌ای این پذیرنده غیرفعال شود؟ (فقط پس از احراز هویت پذیرنده)', { danger: true })) {
+        busy(b, async () => { await api('POST', `/api/admin/merchants/${id}/reset-2fa`); toast('ریست شد'); });
+      }
+      if (b.dataset.act === 'adjust') {
+        const assets = [...new Set([...d.balances.map((x) => x.asset), 'USDT_TRC20', 'USDT_BEP20', 'USDT_TON'])];
+        const a = await modal({
+          title: 'اصلاحیه موجودی', ico: 'coins',
+          body: `<form id="adj" class="stack">${field('ارز', `<select name="asset">${assets.map((x) => `<option>${esc(x)}</option>`).join('')}</select>`)}
+            ${field('مبلغ', '<input name="amount" class="ltr" placeholder="10 یا -10">', 'مثبت = افزایش، منفی = کاهش')}${field('دلیل', '<input name="note" required>')}</form>`,
+          buttons: [{ label: 'انصراف', value: null }, { label: 'ثبت', value: (w2) => formData($('#adj', w2)) }],
+        });
+        if (a) try { await api('POST', `/api/admin/merchants/${id}/adjust`, a); toast('ثبت شد'); } catch (err) { toast(err.message, 'err'); }
+      }
+    }),
   });
-  $('#settleNow').addEventListener('click', async () => {
-    if (!confirm('برای همه ارزهای دارای آدرس، تسویه ساخته شود؟')) return;
-    const r = await api('POST', `/api/admin/merchants/${id}/settle`);
-    showMsg($('#eMsg'), `${r.data.length} تسویه ساخته شد (تب تسویه‌ها)`, 'ok');
-  });
-  $('#adj').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try { await api('POST', `/api/admin/merchants/${id}/adjust`, formData(e.target)); merchantDetail(id); }
-    catch (err) { showMsg($('#adjMsg'), err.message); }
-  });
-  $('#detail').scrollIntoView({ behavior: 'smooth' });
+  if (!result) return onChange?.();
+  try {
+    await api('PATCH', `/api/admin/merchants/${id}`, { fee_percent: Number(result.fee_percent), is_active: result.is_active === 'true', settlement_schedule: result.settlement_schedule, settlement_weekday: Number(result.settlement_weekday) });
+    toast('ذخیره شد');
+  } catch (e) { toast(e.message, 'err'); }
+  onChange?.();
 }
 
-boot();
+start();
 </script>
 </body>
 </html>

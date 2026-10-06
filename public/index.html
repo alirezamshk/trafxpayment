@@ -3,16 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>درگاه پرداخت رمزارز</title>
+<title>TrafxPayment — درگاه پرداخت رمزارز</title>
 <link rel="stylesheet" href="/assets/app.css">
+<style>
+  .hero { max-width: 1040px; margin: 0 auto; padding: 24px 16px 60px; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 64px; }
+  .top .actions { margin-inline-start: auto; display: flex; gap: 8px; }
+  .hero h1 { font-size: 40px; line-height: 1.5; font-weight: 800; max-width: 680px; }
+  .hero h1 span { background: linear-gradient(90deg, var(--brand), #8b5cf6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { font-size: 17px; color: var(--text-2); max-width: 600px; margin: 14px 0 26px; }
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 56px; }
+  .feature .ico { width: 40px; height: 40px; border-radius: 12px; background: var(--brand-50); color: var(--brand); display: grid; place-items: center; margin-bottom: 10px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 26px; }
+  @media (max-width: 760px) { .hero h1 { font-size: 28px; } .features { grid-template-columns: 1fr; } .top { margin-bottom: 36px; } }
+</style>
 </head>
 <body>
-<div class="wrap narrow" style="margin-top:48px">
-  <div class="card">
-    <h1>درگاه پرداخت رمزارز</h1>
-    <p>دریافت USDT، TRX، ETH، BNB و TON با تایید خودکار و تسویه زمان‌بندی‌شده.</p>
-    <div class="row"><a class="btn" href="/panel">ورود پذیرندگان</a><a class="btn secondary" style="border:1px solid var(--border);background:transparent;color:var(--text)" href="/admin">مدیریت</a></div>
-  </div>
-</div>
+<div class="hero" id="root"></div>
+<script src="/assets/app.js"></script>
+<script>
+$('#root').innerHTML = `
+  <div class="top"><div class="brand" style="padding:0"><div class="brand-logo">${icon('bolt')}</div><div>TrafxPayment<small>Crypto payment gateway</small></div></div>
+    <div class="actions"><a class="btn ghost" href="/admin">مدیریت</a><a class="btn" href="/panel">ورود پذیرندگان</a></div></div>
+  <h1>دریافت پرداخت رمزارزی، <span>بدون دردسر</span></h1>
+  <p class="lead">USDT و رمزارزهای محبوب را روی شبکه‌های TRON، BNB Chain، TON و Ethereum دریافت کنید؛ تایید خودکار روی بلاکچین و تسویه زمان‌بندی‌شده به کیف پول شما.</p>
+  <div class="row"><a class="btn" href="/panel">شروع کنید</a><a class="btn secondary" href="/panel#developers">مستندات API</a></div>
+  <div class="chips">${['USDT · TRC20', 'USDT · BEP20', 'USDT · TON', 'TRX', 'BNB', 'TON', 'ETH'].map((c) => `<span class="badge b-info">${c}</span>`).join('')}</div>
+  <div class="features">
+    ${[['bolt', 'تایید خودکار', 'پرداخت‌ها روی بلاکچین رصد و پس از تایید شبکه، خودکار ثبت می‌شوند.'],
+       ['code', 'API و Webhook', 'اتصال سریع به سایت و اپلیکیشن با Webhook امضاشده و صفحه پرداخت آماده.'],
+       ['shield', 'امنیت در سطح بالا', 'کلیدها جدا از سرور وب، تایید دومرحله‌ای، محدودیت IP و کیف سرد.']]
+      .map(([i, t, d]) => `<div class="card"><div class="card-body feature"><div class="ico">${icon(i)}</div><h3>${t}</h3><p class="muted small" style="margin-top:6px">${d}</p></div></div>`).join('')}
+  </div>`;
+</script>
 </body>
 </html>

@@ -3,81 +3,174 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>پرداخت فاکتور</title>
+<meta name="robots" content="noindex">
+<title>پرداخت امن — TrafxPayment</title>
 <link rel="stylesheet" href="/assets/app.css">
+<style>
+  body { min-height: 100vh; background: radial-gradient(1200px 500px at 50% -200px, color-mix(in srgb, var(--brand) 16%, transparent), transparent), var(--bg); }
+  .checkout { max-width: 460px; margin: 0 auto; padding: 28px 16px 40px; }
+  .co-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .co-head .avatar { width: 42px; height: 42px; font-size: 18px; background: var(--surface); border: 1px solid var(--border); }
+  .co-head .secure { margin-inline-start: auto; }
+  .co-card { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; }
+  .co-sum { padding: 20px 22px; border-bottom: 1px dashed var(--border-strong); }
+  .co-sum .amount { font-size: 30px; font-weight: 800; letter-spacing: -.5px; }
+  .co-sum .amount small { font-size: 15px; color: var(--muted); font-weight: 600; }
+  .co-body { padding: 20px 22px 22px; }
+  .steps { display: flex; align-items: center; gap: 6px; margin-bottom: 18px; }
+  .step { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .step .dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border-strong); font-size: 11px; }
+  .step.done .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .step.active { color: var(--text); }
+  .step.active .dot { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .step-line { flex: 1; height: 2px; background: var(--border); border-radius: 2px; min-width: 12px; }
+  .step-line.done { background: var(--ok); }
+  .nets { display: grid; gap: 10px; }
+  .net { all: unset; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); transition: border-color .15s, box-shadow .15s; }
+  .net:hover { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent); }
+  .net:disabled { opacity: .55; cursor: default; }
+  .coin { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12px; color: #fff; flex: none; }
+  .net .meta { flex: 1; min-width: 0; }
+  .net .meta b { display: block; }
+  .net .meta span { font-size: 12px; color: var(--muted); }
+  .net .amt { text-align: left; font-weight: 700; font-size: 13.5px; }
+  .pay-amount { text-align: center; margin: 4px 0 14px; }
+  .pay-amount .lbl { color: var(--muted); font-size: 12.5px; }
+  .pay-amount .val { font-size: 26px; font-weight: 800; direction: ltr; }
+  .qr-wrap { display: flex; justify-content: center; margin: 14px 0; }
+  .qr-wrap img { background: #fff; padding: 10px; border-radius: 14px; border: 1px solid var(--border); }
+  .timer { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+  .bar { height: 5px; background: var(--surface-2); border-radius: 9px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--brand); transition: width 1s linear; }
+  .bar.low > div { background: var(--warn); }
+  .center { text-align: center; }
+  .big-ico { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; margin: 4px auto 12px; }
+  .big-ico svg.i { width: 36px; height: 36px; stroke-width: 2.2; }
+  .spin { width: 46px; height: 46px; border: 4px solid var(--brand-50); border-top-color: var(--brand); border-radius: 50%; animation: rot 1s linear infinite; margin: 6px auto 14px; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  .kv:last-child { border-bottom: 0; }
+  .kv span:first-child { color: var(--muted); }
+  .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; display: flex; gap: 6px; align-items: center; justify-content: center; }
+  .label-row { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px; font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+</style>
 </head>
 <body>
-<div class="wrap narrow">
-  <div class="card" id="root"><p class="muted">در حال بارگذاری…</p></div>
-  <p class="muted small" style="text-align:center">پرداخت امن با رمزارز</p>
+<div class="checkout">
+  <div class="co-head" id="head"></div>
+  <div class="co-card" id="card"><div class="co-body stack"><div class="skeleton" style="width:50%"></div><div class="skeleton"></div><div class="skeleton" style="width:70%"></div></div></div>
+  <div class="foot"></div>
 </div>
 <script src="/assets/app.js"></script>
 <script>
+'use strict';
 const id = location.pathname.split('/').pop();
-let inv, timer;
+const COIN_COLORS = { USDT: '#26a17b', TRX: '#eb0029', ETH: '#627eea', BNB: '#f0b90b', POL: '#8247e5', TON: '#0098ea' };
+const LOW_FEE = { bsc: true, ton: true, polygon: true };
+let inv, poll;
 
-function countdown() {
-  const el = $('#countdown');
-  if (!el || !inv) return;
+const coin = (sym) => `<span class="coin" style="background:${COIN_COLORS[sym] || 'var(--brand)'}">${esc(sym.slice(0, 4))}</span>`;
+$('.foot').innerHTML = `${icon('lock')} پرداخت امن با TrafxPayment`;
+
+function stepper(stage) {
+  const steps = ['انتخاب ارز', 'پرداخت', 'تایید شبکه', 'تکمیل'];
+  return `<div class="steps">${steps.map((s, i) => `${i ? `<div class="step-line ${i <= stage ? 'done' : ''}"></div>` : ''}<div class="step ${i < stage ? 'done' : i === stage ? 'active' : ''}"><span class="dot">${i < stage ? icon('check') : i + 1}</span>${i === stage ? s : ''}</div>`).join('')}</div>`;
+}
+
+function timer() {
   const ms = new Date(inv.expires_at) - Date.now();
-  if (ms <= 0) return (el.textContent = 'زمان پرداخت به پایان رسید');
+  const total = 30 * 60 * 1000;
+  if (ms <= 0) return `<div class="timer">${icon('clock')}زمان پرداخت تمام شد</div>`;
   const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
-  el.textContent = `زمان باقی‌مانده: ${m}:${String(s).padStart(2, '0')}`;
+  const pct = Math.max(0, Math.min(100, (ms / total) * 100));
+  return `<div class="timer">${icon('clock')}<span>زمان باقی‌مانده</span><b class="num" style="margin-inline-start:auto">${m}:${String(s).padStart(2, '0')}</b></div>
+    <div class="bar ${ms < 5 * 60000 ? 'low' : ''}"><div style="width:${pct}%"></div></div>`;
 }
 
 function render() {
-  const root = $('#root');
-  const head = `<div class="topbar"><h1>${esc(inv.merchant_name || 'پرداخت')}</h1>${badge(inv.status)}</div>
-    ${inv.description ? `<p>${esc(inv.description)}</p>` : ''}
-    <p class="muted">مبلغ فاکتور: <b class="ltr">${esc(inv.price_amount)} ${esc(inv.price_currency)}</b></p>`;
-
-  if (!inv.asset) {
-    if (inv.status !== 'pending') return (root.innerHTML = head + '<div class="alert err">این فاکتور دیگر قابل پرداخت نیست.</div>');
-    root.innerHTML = head + `<h3>ارز و شبکه پرداخت را انتخاب کنید</h3><div class="assets">${inv.assets
-      .map((a) => `<button data-asset="${esc(a.id)}"><b>${esc(a.symbol)}</b><br><span class="small muted">${esc(a.network_name)}</span></button>`)
-      .join('')}</div><div id="msg"></div><p id="countdown" class="muted small"></p>`;
-    root.querySelectorAll('[data-asset]').forEach((b) =>
-      b.addEventListener('click', async () => {
-        b.disabled = true;
-        try { inv = await api('POST', `/api/public/invoices/${id}/asset`, { asset: b.dataset.asset }); render(); }
-        catch (e) { showMsg($('#msg'), e.message); b.disabled = false; }
-      }));
-    return countdown();
-  }
+  $('#head').innerHTML = `<div class="avatar">${esc((inv.merchant_name || '?').slice(0, 1))}</div>
+    <div><b>${esc(inv.merchant_name || 'پرداخت')}</b><div class="small muted">${esc(inv.description || 'پرداخت با رمزارز')}</div></div>
+    <span class="badge b-ok secure">${icon('lock')}امن</span>`;
+  const sum = `<div class="co-sum"><div class="small muted">مبلغ قابل پرداخت</div><div class="amount num">${fmtAmount(inv.price_amount, 2)} <small>${esc(inv.price_currency)}</small></div></div>`;
+  const card = $('#card');
 
   if (inv.status === 'paid') {
-    root.innerHTML = head + `<div class="alert ok">پرداخت با موفقیت تایید شد. ✓</div>
-      <p>دریافت‌شده: <b class="ltr">${esc(inv.amount_received)} ${esc(inv.asset_symbol)}</b></p>
-      ${inv.success_url ? `<p class="muted small">در حال بازگشت به فروشگاه…</p><a class="btn" href="${esc(inv.success_url)}">بازگشت به فروشگاه</a>` : ''}`;
-    if (inv.success_url) setTimeout(() => (location.href = inv.success_url), 4000);
+    card.innerHTML = `${sum}<div class="co-body center">${stepper(4)}
+      <div class="big-ico" style="background:var(--ok-bg);color:var(--ok)">${icon('check')}</div>
+      <h2>پرداخت با موفقیت انجام شد</h2><p class="muted">از خرید شما متشکریم</p>
+      <div style="text-align:start;margin:14px 0">
+        <div class="kv"><span>مبلغ دریافت‌شده</span><b class="num">${fmtAmount(inv.amount_received)} ${esc(inv.asset_symbol)}</b></div>
+        <div class="kv"><span>شبکه</span><span>${esc(inv.network_name)}</span></div>
+        <div class="kv"><span>شماره پیگیری</span><span class="mono small">${esc(short(inv.id, 6))}</span></div>
+      </div>
+      ${inv.success_url ? `<a class="btn block" href="${esc(inv.success_url)}">بازگشت به فروشگاه</a><p class="small muted" style="margin-top:8px">تا چند ثانیه دیگر منتقل می‌شوید…</p>` : ''}</div>`;
+    if (inv.success_url) setTimeout(() => (location.href = inv.success_url), 5000);
     return;
   }
   if (inv.status === 'expired' || inv.status === 'cancelled') {
-    root.innerHTML = head + `<div class="alert err">${inv.status === 'expired' ? 'مهلت پرداخت این فاکتور تمام شده است. اگر مبلغی ارسال کرده‌اید با فروشنده تماس بگیرید.' : 'این فاکتور لغو شده است.'}</div>
-      ${inv.cancel_url ? `<a class="btn secondary" href="${esc(inv.cancel_url)}">بازگشت</a>` : ''}`;
+    card.innerHTML = `${sum}<div class="co-body center">
+      <div class="big-ico" style="background:var(--surface-2);color:var(--muted)">${icon(inv.status === 'expired' ? 'clock' : 'x')}</div>
+      <h2>${inv.status === 'expired' ? 'مهلت پرداخت تمام شد' : 'این فاکتور لغو شده است'}</h2>
+      <p class="muted">${inv.status === 'expired' ? 'اگر مبلغی ارسال کرده‌اید، نگران نباشید؛ با فروشنده تماس بگیرید.' : ''}</p>
+      ${inv.cancel_url ? `<a class="btn secondary block" href="${esc(inv.cancel_url)}">بازگشت به فروشگاه</a>` : ''}</div>`;
     return;
   }
 
-  const remaining = inv.status === 'partially_paid' ? `<div class="alert warn">مبلغ دریافتی کمتر از مبلغ فاکتور است. دریافت‌شده: <span class="ltr">${esc(inv.amount_received)} + ${esc(inv.amount_pending)}</span> ${esc(inv.asset_symbol)} — لطفاً باقی‌مانده را به همین آدرس ارسال کنید.</div>` : '';
-  const confirming = inv.status === 'confirming' ? `<div class="alert ok">تراکنش شما دریافت شد و در انتظار ${esc(inv.confirmations_required)} تایید شبکه است…</div>` : '';
-  root.innerHTML = head + confirming + remaining + `
-    <label>دقیقاً این مبلغ را ارسال کنید</label>${copyBox(inv.pay_amount)}
-    <p class="small muted">ارز: <b>${esc(inv.asset_symbol)}</b> — شبکه: <b>${esc(inv.network_name)}</b>${inv.token_contract ? ` — قرارداد: <span class="mono">${esc(short(inv.token_contract, 6))}</span>` : ''}</p>
-    <label>به این آدرس</label>${copyBox(inv.address)}
-    ${inv.permanent_address ? `<div class="alert warn small">این آدرس اختصاصی شماست. همیشه آدرس را از همین صفحه کپی کنید، نه از تاریخچه کیف پول (کلاهبردارها با واریز مبلغ ناچیز از آدرس‌های مشابه، تاریخچه را آلوده می‌کنند). اول و آخر آدرس را کامل چک کنید.</div>` : ''}
-    ${inv.memo ? `<label>کامنت / Memo (الزامی)</label>${copyBox(inv.memo)}<div class="alert warn">بدون وارد کردن این کامنت، پرداخت شما شناسایی نمی‌شود.</div>` : ''}
-    ${inv.qr ? `<img class="qr" src="${inv.qr}" width="220" height="220" alt="QR">` : ''}
-    <div class="alert warn small">فقط ${esc(inv.asset_symbol)} را روی شبکه ${esc(inv.network_name)} ارسال کنید؛ ارسال روی شبکه یا ارز دیگر باعث از دست رفتن وجه می‌شود.</div>
-    <p id="countdown" class="muted small"></p>`;
-  countdown();
+  if (!inv.asset) {
+    card.innerHTML = `${sum}<div class="co-body">${stepper(0)}
+      <h3 style="margin-bottom:10px">ارز و شبکه پرداخت را انتخاب کنید</h3>
+      <div class="nets">${inv.assets.map((a) => `<button class="net" data-asset="${esc(a.id)}">${coin(a.symbol)}
+        <div class="meta"><b>${esc(a.symbol)}</b><span>شبکه ${esc(a.network_name)}${LOW_FEE[a.network] ? ' · <span style="color:var(--ok)">کارمزد کم</span>' : ''}</span></div>
+        <div class="amt num">${a.pay_amount ? fmtAmount(a.pay_amount) : ''}</div></button>`).join('') || alertBox('warn', 'هیچ روش پرداختی برای این مبلغ در دسترس نیست.')}</div>
+      <div style="margin-top:16px">${timer()}</div></div>`;
+    $$('[data-asset]').forEach((b) => b.addEventListener('click', async () => {
+      $$('[data-asset]').forEach((x) => (x.disabled = true));
+      try { inv = await api('POST', `/api/public/invoices/${id}/asset`, { asset: b.dataset.asset }); render(); }
+      catch (e) { toast(e.message, 'err'); $$('[data-asset]').forEach((x) => (x.disabled = false)); }
+    }));
+    return;
+  }
+
+  if (inv.status === 'confirming') {
+    card.innerHTML = `${sum}<div class="co-body center">${stepper(2)}
+      <div class="spin"></div><h2>پرداخت شما دریافت شد</h2>
+      <p class="muted">در انتظار تایید شبکه ${esc(inv.network_name)} (${esc(inv.confirmations_required)} تایید)… این صفحه خودکار به‌روز می‌شود.</p>
+      <div class="kv"><span>مبلغ در حال تایید</span><b class="num">${fmtAmount(inv.amount_pending)} ${esc(inv.asset_symbol)}</b></div></div>`;
+    return;
+  }
+
+  const partial = inv.status === 'partially_paid';
+  const remaining = partial ? Math.max(0, Number(inv.pay_amount) - Number(inv.amount_received) - Number(inv.amount_pending)) : null;
+  card.innerHTML = `${sum}<div class="co-body">${stepper(1)}
+    ${partial ? alertBox('warn', `مبلغ دریافتی کمتر از فاکتور است. لطفاً <b class="num">${fmtAmount(String(remaining.toFixed(6)))} ${esc(inv.asset_symbol)}</b> دیگر به همین آدرس ارسال کنید.`) : ''}
+    <div class="pay-amount"><div class="lbl">دقیقاً این مقدار را ارسال کنید</div>
+      <div class="val">${fmtAmount(inv.pay_amount)} <span style="font-size:16px;color:var(--muted)">${esc(inv.asset_symbol)}</span></div>
+      <div class="row" style="justify-content:center;margin-top:6px">${coin(inv.asset_symbol)}<span class="badge b-info">شبکه ${esc(inv.network_name)}</span></div>
+      ${inv.network_fee && Number(inv.network_fee) > 0 ? `<div class="small muted" style="margin-top:6px">شامل ${fmtAmount(inv.network_fee)} ${esc(inv.asset_symbol)} کارمزد شبکه</div>` : ''}
+    </div>
+    ${copyField(inv.pay_amount, { label: 'کپی مبلغ' })}
+    <div class="label-row">${icon('wallet')}آدرس واریز</div>
+    ${copyField(inv.address, { label: 'کپی آدرس' })}
+    ${inv.memo ? `<div class="label-row" style="color:var(--err)">${icon('alert')}کامنت / Memo — الزامی</div>${copyField(inv.memo, { lg: true, label: 'کپی' })}
+      <div style="margin-top:8px">${alertBox('err', 'بدون نوشتن این کامنت در کیف پول، پرداخت شما شناسایی <b>نمی‌شود</b>.')}</div>` : ''}
+    ${inv.qr ? `<div class="qr-wrap"><img src="${inv.qr}" width="200" height="200" alt="QR"></div>` : ''}
+    ${inv.payment_uri && inv.payment_uri.startsWith('ton://') ? `<a class="btn secondary block" href="${esc(inv.payment_uri)}">${icon('external')}باز کردن در کیف پول (Tonkeeper)</a><div style="height:10px"></div>` : ''}
+    ${alertBox('warn', `فقط <b>${esc(inv.asset_symbol)}</b> روی شبکه <b>${esc(inv.network_name)}</b> بفرستید. ارسال روی شبکه دیگر باعث از دست رفتن وجه می‌شود.`)}
+    ${inv.permanent_address ? `<div style="margin-top:8px">${alertBox('info', 'این آدرس اختصاصی شماست. همیشه آدرس را از همین صفحه کپی کنید، نه از تاریخچه کیف پول.', 'shield')}</div>` : ''}
+    <div style="margin-top:14px">${timer()}</div>
+    <p class="small muted center" style="margin-top:12px">${icon('refresh')} پس از ارسال، این صفحه خودکار به‌روز می‌شود</p></div>`;
 }
 
 async function load() {
   try { inv = await api('GET', `/api/public/invoices/${id}`); render(); }
-  catch (e) { $('#root').innerHTML = `<div class="alert err">${esc(e.status === 404 ? 'فاکتور یافت نشد.' : e.message)}</div>`; }
-  if (!inv || !['paid', 'cancelled'].includes(inv.status)) timer = setTimeout(load, 5000);
+  catch (e) {
+    $('#card').innerHTML = `<div class="co-body center"><div class="big-ico" style="background:var(--err-bg);color:var(--err)">${icon('alert')}</div><h2>${e.status === 404 ? 'فاکتور یافت نشد' : 'خطا در بارگذاری'}</h2><p class="muted">${esc(e.status === 404 ? 'لینک پرداخت نامعتبر است.' : e.message)}</p></div>`;
+    return;
+  }
+  if (!['paid', 'cancelled'].includes(inv.status)) poll = setTimeout(load, 5000);
 }
-setInterval(countdown, 1000);
+// Refresh only the countdown every second (does not re-render copy fields while the user interacts).
+setInterval(() => { const t = $('.timer')?.parentElement; if (t && inv && inv.status !== 'paid') t.innerHTML = timer(); }, 1000);
 load();
 </script>
 </body>
