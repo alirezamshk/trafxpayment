@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { pool, withTx, type Queryable } from '../db.js';
 import { findAsset, type Registry } from '../chains/assets.js';
 import { fromBaseUnits as formatUnits } from '../lib/amount.js';
+import { AssetSettingsService } from './asset-settings.js';
 import { enqueueWebhook } from './webhooks.js';
 
 /**
@@ -49,6 +50,7 @@ export interface PayoutRow {
   chain: string;
   address: string;
   amount: string;
+  fee: string;
   status: 'pending_approval' | 'approved' | 'sending' | 'sent' | 'completed' | 'failed' | 'rejected';
   tx_hash: string | null;
   error: string | null;
@@ -60,11 +62,15 @@ export interface PayoutRow {
 }
 
 export class LedgerService {
+  readonly settings: AssetSettingsService;
+
   constructor(
     private readonly registry: Registry,
     private readonly requireApproval = config.PAYOUT_REQUIRE_APPROVAL,
     private readonly settlementHour = config.SETTLEMENT_HOUR_UTC,
-  ) {}
+  ) {
+    this.settings = new AssetSettingsService(registry);
+  }
 
   /**
    * Credits a paid invoice to the merchant (gross payment minus platform fee). Idempotent: only the
@@ -113,9 +119,11 @@ export class LedgerService {
   }
 
   async platformSummary(db: Queryable) {
-    const { rows } = await db.query<{ asset: string; fees: string; merchant_balances: string; volume: string }>(
+    const { rows } = await db.query<{ asset: string; fees: string; payout_fees: string; merchant_balances: string; volume: string }>(
       `SELECT asset,
               -COALESCE(SUM(amount) FILTER (WHERE type = 'fee'), 0) AS fees,
+              -COALESCE(SUM(amount) FILTER (WHERE type = 'payout_fee'), 0)
+                - COALESCE(SUM(amount) FILTER (WHERE type = 'payout_reversal' AND note LIKE 'fee:%'), 0) AS payout_fees,
               COALESCE(SUM(amount), 0) AS merchant_balances,
               COALESCE(SUM(amount) FILTER (WHERE type = 'payment'), 0) AS volume
        FROM ledger_entries GROUP BY asset ORDER BY asset`,
@@ -135,8 +143,9 @@ export class LedgerService {
   // ------------------------------------------------------------------ payouts
 
   /**
-   * Moves the merchant's whole available balance of `asset` into a payout to their configured address.
-   * Funds are debited from the ledger immediately (reserved), and restored if the payout is rejected/fails.
+   * Moves the merchant's whole available balance of `asset` into a payout to their configured address,
+   * minus the per-asset network fee (charged to the merchant). Funds are debited from the ledger
+   * immediately (reserved), and restored in full if the payout is rejected or fails.
    */
   async createPayout(db: pg.PoolClient, merchantId: string, asset: string, opts: { respectMinimum: boolean }): Promise<PayoutRow | null> {
     const def = findAsset(this.registry, asset);
@@ -155,18 +164,27 @@ export class LedgerService {
     const balance = BigInt(bal[0]!.balance);
     if (balance <= 0n) return null;
     if (opts.respectMinimum && balance < BigInt(addr[0].min_amount)) return null;
+    const { payoutFee } = await this.settings.get(db, asset);
+    const amount = balance - payoutFee;
+    if (amount <= 0n) return null;
 
     const status = this.requireApproval ? 'pending_approval' : 'approved';
     const { rows } = await db.query<PayoutRow>(
-      `INSERT INTO payouts (merchant_id, asset, chain, address, amount, status, approved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'approved' THEN now() END) RETURNING *`,
-      [merchantId, asset, def.chain, addr[0].address, balance.toString(), status],
+      `INSERT INTO payouts (merchant_id, asset, chain, address, amount, fee, status, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 = 'approved' THEN now() END) RETURNING *`,
+      [merchantId, asset, def.chain, addr[0].address, amount.toString(), payoutFee.toString(), status],
     );
     const payout = rows[0]!;
     await db.query(
       `INSERT INTO ledger_entries (merchant_id, asset, amount, type, payout_id) VALUES ($1, $2, $3, 'payout', $4)`,
-      [merchantId, asset, (-balance).toString(), payout.id],
+      [merchantId, asset, (-amount).toString(), payout.id],
     );
+    if (payoutFee > 0n) {
+      await db.query(
+        `INSERT INTO ledger_entries (merchant_id, asset, amount, type, payout_id, note) VALUES ($1, $2, $3, 'payout_fee', $4, 'network fee')`,
+        [merchantId, asset, (-payoutFee).toString(), payout.id],
+      );
+    }
     await enqueueWebhook(db, merchantId, null, 'payout.created', this.serializePayout(payout));
     return payout;
   }
@@ -220,6 +238,13 @@ export class LedgerService {
          VALUES ($1, $2, $3, 'payout_reversal', $4, $5)`,
         [p.merchant_id, p.asset, p.amount, p.id, status],
       );
+      if (BigInt(p.fee) > 0n) {
+        await db.query(
+          `INSERT INTO ledger_entries (merchant_id, asset, amount, type, payout_id, note)
+           VALUES ($1, $2, $3, 'payout_reversal', $4, $5)`,
+          [p.merchant_id, p.asset, p.fee, p.id, `fee:${status}`],
+        );
+      }
       await enqueueWebhook(db, p.merchant_id, null, `payout.${status}`, this.serializePayout(p));
       return true;
     });
@@ -241,6 +266,7 @@ export class LedgerService {
       network: p.chain,
       address: p.address,
       amount,
+      fee: def ? formatUnits(p.fee ?? '0', def.decimals) : p.fee,
       status: p.status,
       tx_hash: p.tx_hash,
       error: p.error,

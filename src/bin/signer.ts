@@ -37,5 +37,5 @@ for (const chain of Object.values(registry.chains)) {
 }
 for (const s of signers) log.info({ chain: s.chain, hotWallet: s.hotAddress }, 'signer ready');
 
-const stop = runLoops([new SweepJob(signers, registry, log), new PayoutJob(signers, registry, ledger, log)], log);
+const stop = runLoops([new SweepJob(signers, registry, ledger.settings, log), new PayoutJob(signers, registry, ledger, log)], log);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { stop(); setTimeout(() => process.exit(0), 1000); });

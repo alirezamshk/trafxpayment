@@ -18,4 +18,8 @@ export interface ChainSigner {
   preparePayout(asset: AssetDef, to: string, amount: bigint): Promise<PreparedTx>;
   txState(hash: string): Promise<TxState>;
   validateAddress(address: string): boolean;
+  /** Spendable hot-wallet balance of `asset` in base units, or null if unknown. */
+  hotBalance(asset: AssetDef): Promise<bigint | null>;
+  /** Returns gas left on a deposit address after a token sweep back to the hot wallet (optional). */
+  reclaimGas?(index: number, depositAddress: string, record: (kind: 'gas_return', hash: string, amount: bigint) => Promise<void>): Promise<void>;
 }

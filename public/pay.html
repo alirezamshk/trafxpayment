@@ -64,6 +64,7 @@ function render() {
     <label>دقیقاً این مبلغ را ارسال کنید</label>${copyBox(inv.pay_amount)}
     <p class="small muted">ارز: <b>${esc(inv.asset_symbol)}</b> — شبکه: <b>${esc(inv.network_name)}</b>${inv.token_contract ? ` — قرارداد: <span class="mono">${esc(short(inv.token_contract, 6))}</span>` : ''}</p>
     <label>به این آدرس</label>${copyBox(inv.address)}
+    ${inv.permanent_address ? `<div class="alert warn small">این آدرس اختصاصی شماست. همیشه آدرس را از همین صفحه کپی کنید، نه از تاریخچه کیف پول (کلاهبردارها با واریز مبلغ ناچیز از آدرس‌های مشابه، تاریخچه را آلوده می‌کنند). اول و آخر آدرس را کامل چک کنید.</div>` : ''}
     ${inv.memo ? `<label>کامنت / Memo (الزامی)</label>${copyBox(inv.memo)}<div class="alert warn">بدون وارد کردن این کامنت، پرداخت شما شناسایی نمی‌شود.</div>` : ''}
     ${inv.qr ? `<img class="qr" src="${inv.qr}" width="220" height="220" alt="QR">` : ''}
     <div class="alert warn small">فقط ${esc(inv.asset_symbol)} را روی شبکه ${esc(inv.network_name)} ارسال کنید؛ ارسال روی شبکه یا ارز دیگر باعث از دست رفتن وجه می‌شود.</div>

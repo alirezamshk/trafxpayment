@@ -30,6 +30,7 @@ export async function adminRoutes(app: FastifyInstance) {
       assets: totals.map((t) => ({
         asset: t.asset,
         platform_fees: fmt(t.asset, t.fees),
+        payout_fees: fmt(t.asset, t.payout_fees),
         merchant_balances: fmt(t.asset, t.merchant_balances),
         volume: fmt(t.asset, t.volume),
       })),
@@ -38,6 +39,27 @@ export async function adminRoutes(app: FastifyInstance) {
       unmatched_deposits: Number(unmatched[0]!.n),
       available_assets: invoices.availableAssets(),
     };
+  });
+
+  // --- per-asset settings (sweep threshold, payout network fee)
+  app.get('/asset-settings', async () => ({
+    data: await ledger.settings.view(pool, invoices.availableAssets().map((a) => a.id)),
+  }));
+  app.put('/asset-settings', async (req) => {
+    const b = parse(
+      z.object({ asset: z.string(), sweep_threshold: z.string().regex(/^\d+(\.\d+)?$/), payout_fee: z.string().regex(/^\d+(\.\d+)?$/) }),
+      req.body,
+    );
+    const asset = invoices.asset(b.asset);
+    let threshold: bigint, fee: bigint;
+    try {
+      threshold = toBaseUnits(b.sweep_threshold, asset.decimals);
+      fee = toBaseUnits(b.payout_fee, asset.decimals);
+    } catch (e) {
+      throw httpError(400, 'invalid_amount', (e as Error).message);
+    }
+    await ledger.settings.set(pool, asset.id, threshold, fee);
+    return { ok: true };
   });
 
   // --- merchants

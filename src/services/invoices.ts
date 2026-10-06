@@ -27,6 +27,8 @@ export interface InvoiceRow {
   amount_received: string;
   amount_pending: string;
   status: InvoiceStatus;
+  customer_id: string | null;
+  deposit_address_id: string | null;
   fee_percent: string | null;
   fee_amount: string;
   is_late: boolean;
@@ -84,6 +86,8 @@ export interface CreateInvoiceInput {
   cancel_url?: string;
   metadata?: Record<string, unknown>;
   expires_in_minutes?: number;
+  /** Merchant's own user id: that user always gets the same deposit address. */
+  customer_id?: string;
 }
 
 export class InvoiceError extends Error {
@@ -106,6 +110,9 @@ export interface InvoiceServiceDeps {
   defaultTtlMinutes?: number;
   lateWindowHours?: number;
   publicBaseUrl?: string;
+  poolCooldownHours?: number;
+  poolMax?: number;
+  customerWatchDays?: number;
 }
 
 const MEMO_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -121,12 +128,18 @@ export class InvoiceService {
   readonly defaultTtlMinutes: number;
   readonly lateWindowHours: number;
   readonly publicBaseUrl: string;
+  readonly poolCooldownHours: number;
+  readonly poolMax: number;
+  readonly customerWatchDays: number;
 
   constructor(private readonly deps: InvoiceServiceDeps) {
     this.tolerancePercent = deps.tolerancePercent ?? config.UNDERPAY_TOLERANCE_PERCENT;
     this.defaultTtlMinutes = deps.defaultTtlMinutes ?? config.INVOICE_TTL_MINUTES;
     this.lateWindowHours = deps.lateWindowHours ?? config.LATE_PAYMENT_WINDOW_HOURS;
     this.publicBaseUrl = (deps.publicBaseUrl ?? config.PUBLIC_BASE_URL).replace(/\/$/, '');
+    this.poolCooldownHours = deps.poolCooldownHours ?? config.ADDRESS_POOL_COOLDOWN_HOURS;
+    this.poolMax = deps.poolMax ?? config.ADDRESS_POOL_MAX;
+    this.customerWatchDays = deps.customerWatchDays ?? config.CUSTOMER_ADDRESS_WATCH_DAYS;
   }
 
   get registry(): Registry {
@@ -151,6 +164,10 @@ export class InvoiceService {
     const currency = input.price_currency.trim().toUpperCase();
     if (!/^[A-Z0-9_]{2,12}$/.test(currency)) throw new InvoiceError('Invalid price_currency');
     const asset = input.asset ? this.asset(input.asset) : undefined;
+    const customerId = input.customer_id?.trim() || null;
+    if (customerId && !/^[\w.@:+-]{1,128}$/.test(customerId)) {
+      throw new InvoiceError('customer_id must be 1-128 characters: letters, digits, . _ - @ : +');
+    }
 
     // Quote before opening the DB transaction so a slow price API never holds locks.
     const quote = asset ? await this.quote(asset, price, currency) : undefined;
@@ -169,8 +186,8 @@ export class InvoiceService {
       }
       const { rows } = await db.query<InvoiceRow>(
         `INSERT INTO invoices (merchant_id, order_id, description, price_amount, price_currency,
-                               success_url, cancel_url, metadata, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9))
+                               success_url, cancel_url, metadata, expires_at, customer_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9), $10)
          RETURNING *`,
         [
           merchantId,
@@ -182,6 +199,7 @@ export class InvoiceService {
           input.cancel_url ?? null,
           JSON.stringify(input.metadata ?? {}),
           ttl,
+          customerId,
         ],
       );
       let invoice = rows[0]!;
@@ -235,32 +253,133 @@ export class InvoiceService {
     const chain = this.deps.registry.chains[asset.chain];
     let address: string;
     let memo: string | null = null;
-    let index: bigint | null = null;
+    let index: string | null = null;
+    let addressId: string | null = null;
 
     if (chain.usesMemo) {
       if (!this.deps.tonTreasury) throw new InvoiceError('TON treasury address not configured', 500, 'misconfigured');
       address = this.deps.tonTreasury;
       memo = generateMemo();
     } else {
-      const family = chain.family as KeyFamily;
+      const a = await this.allocateAddress(db, chain.family as KeyFamily, invoice);
+      address = a.address;
+      index = a.derivation_index;
+      addressId = a.id;
+    }
+
+    const { rows } = await db.query<InvoiceRow>(
+      `UPDATE invoices SET asset = $2, chain = $3, address = $4, memo = $5, derivation_index = $6,
+              pay_amount = $7, rate = $8, deposit_address_id = $9, updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [invoice.id, asset.id, asset.chain, address, memo, index, quote.amount.toString(), quote.rate, addressId],
+    );
+    return rows[0]!;
+  }
+
+  /**
+   * Picks the deposit address for an invoice and binds it as the address's current invoice.
+   * - customer_id given: that customer's permanent address (created on first use). A still-unpaid
+   *   earlier invoice of the same customer is cancelled; one with payments in flight blocks.
+   * - otherwise: a free address from the merchant's pool that has rested for the cool-down period,
+   *   so a late payment to an old invoice is not credited to a new one; a new address is derived
+   *   only when none is free (up to the pool limit).
+   */
+  private async allocateAddress(
+    db: pg.PoolClient,
+    family: KeyFamily,
+    invoice: InvoiceRow,
+  ): Promise<{ id: string; address: string; derivation_index: string }> {
+    type Row = { id: string; address: string; derivation_index: string; current_invoice_id: string | null };
+    let row: Row | undefined;
+
+    if (invoice.customer_id) {
+      ({ rows: [row] } = await db.query<Row>(
+        `SELECT id, address, derivation_index, current_invoice_id FROM deposit_addresses
+         WHERE merchant_id = $1 AND family = $2 AND customer_id = $3 FOR UPDATE`,
+        [invoice.merchant_id, family, invoice.customer_id],
+      ));
+      if (row?.current_invoice_id && row.current_invoice_id !== invoice.id) {
+        await this.releaseBusyCustomerInvoice(db, row.current_invoice_id);
+      }
+    } else {
+      ({ rows: [row] } = await db.query<Row>(
+        `SELECT id, address, derivation_index, current_invoice_id FROM deposit_addresses
+         WHERE merchant_id = $1 AND family = $2 AND customer_id IS NULL AND current_invoice_id IS NULL
+           AND (released_at IS NULL OR released_at < now() - make_interval(hours => $3))
+         ORDER BY released_at NULLS FIRST, id
+         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+        [invoice.merchant_id, family, this.poolCooldownHours],
+      ));
+      if (!row) {
+        const { rows: c } = await db.query<{ n: string }>(
+          `SELECT COUNT(*) AS n FROM deposit_addresses WHERE merchant_id = $1 AND family = $2 AND customer_id IS NULL`,
+          [invoice.merchant_id, family],
+        );
+        if (Number(c[0]!.n) >= this.poolMax) {
+          throw new InvoiceError('No free deposit address right now, try again later', 503, 'address_pool_exhausted');
+        }
+      }
+    }
+
+    if (!row) {
       const { rows } = await db.query<{ idx: string }>(
         `INSERT INTO hd_counters (family, next_index) VALUES ($1, 1)
          ON CONFLICT (family) DO UPDATE SET next_index = hd_counters.next_index + 1
          RETURNING next_index - 1 AS idx`,
         [family],
       );
-      index = BigInt(rows[0]!.idx);
+      const index = BigInt(rows[0]!.idx);
       if (index >= 2n ** 31n) throw new Error('HD index space exhausted');
-      address = this.deps.wallet(family).deriveAddress(Number(index));
+      const address = this.deps.wallet(family).deriveAddress(Number(index));
+      ({ rows: [row] } = await db.query<Row>(
+        `INSERT INTO deposit_addresses (family, derivation_index, address, merchant_id, customer_id)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, address, derivation_index, current_invoice_id`,
+        [family, index.toString(), address, invoice.merchant_id, invoice.customer_id],
+      ));
     }
 
-    const { rows } = await db.query<InvoiceRow>(
-      `UPDATE invoices SET asset = $2, chain = $3, address = $4, memo = $5, derivation_index = $6,
-              pay_amount = $7, rate = $8, updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [invoice.id, asset.id, asset.chain, address, memo, index?.toString() ?? null, quote.amount.toString(), quote.rate],
+    await db.query(
+      `UPDATE deposit_addresses SET current_invoice_id = $2, last_invoice_id = $2, released_at = NULL WHERE id = $1`,
+      [row!.id, invoice.id],
     );
-    return rows[0]!;
+    return row!;
+  }
+
+  /** A customer opened a new invoice: drop the previous one if nothing was paid on it yet. */
+  private async releaseBusyCustomerInvoice(db: pg.PoolClient, invoiceId: string): Promise<void> {
+    const { rows } = await db.query<InvoiceRow>('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [invoiceId]);
+    const prev = rows[0];
+    if (!prev || !['pending', 'expired'].includes(prev.status)) {
+      if (prev && ['confirming', 'partially_paid'].includes(prev.status)) {
+        throw new InvoiceError(
+          'This customer has a payment in progress on another invoice; wait until it completes',
+          409,
+          'customer_busy',
+        );
+      }
+      return;
+    }
+    const { rows: d } = await db.query('SELECT 1 FROM deposits WHERE invoice_id = $1 AND status <> $2 LIMIT 1', [invoiceId, 'orphaned']);
+    if (d.length) throw new InvoiceError('This customer has a payment in progress on another invoice', 409, 'customer_busy');
+    if (prev.status === 'pending') {
+      const { rows: up } = await db.query<InvoiceRow>(
+        `UPDATE invoices SET status = 'cancelled', updated_at = now() WHERE id = $1 RETURNING *`,
+        [invoiceId],
+      );
+      await enqueueWebhook(db, prev.merchant_id, invoiceId, 'invoice.cancelled', this.serialize(up[0]!, []));
+    }
+  }
+
+  /** Frees the invoice's address once the invoice no longer expects payments. */
+  private async releaseAddress(db: pg.PoolClient, inv: InvoiceRow): Promise<void> {
+    if (!inv.deposit_address_id) return;
+    const done =
+      ['paid', 'expired', 'cancelled'].includes(inv.status) || (inv.status === 'partially_paid' && inv.expires_at < new Date());
+    if (!done) return;
+    await db.query(
+      `UPDATE deposit_addresses SET current_invoice_id = NULL, released_at = now() WHERE id = $1 AND current_invoice_id = $2`,
+      [inv.deposit_address_id, inv.id],
+    );
   }
 
   // ------------------------------------------------------------------ reads
@@ -282,15 +401,22 @@ export class InvoiceService {
     return rows;
   }
 
-  /** Invoices whose address must still be monitored on `chain`. */
+  /**
+   * Addresses to monitor on `chain`, each with the invoice a payment to it is credited to:
+   * the address's open invoice, or else its most recent one (late payments) while within the
+   * late-payment window — or, for a customer's permanent address, the longer customer window
+   * (customers may pay again without opening an invoice). One row per address.
+   */
   async watched(db: Queryable, chain: string): Promise<InvoiceRow[]> {
     const { rows } = await db.query<InvoiceRow>(
-      `SELECT * FROM invoices
-       WHERE chain = $1 AND address IS NOT NULL
-         AND (status IN ('pending', 'confirming')
-              OR (status IN ('partially_paid', 'expired')
-                  AND expires_at > now() - make_interval(hours => $2)))`,
-      [chain, this.lateWindowHours],
+      `SELECT i.* FROM deposit_addresses da
+       JOIN invoices i ON i.id = COALESCE(da.current_invoice_id, da.last_invoice_id)
+       WHERE i.chain = $1
+         AND (da.current_invoice_id IS NOT NULL
+              OR da.released_at > now() - make_interval(hours => $2)
+              OR (da.customer_id IS NOT NULL AND da.released_at > now() - make_interval(days => $3))
+              OR i.status IN ('pending', 'confirming'))`,
+      [chain, this.lateWindowHours, this.customerWatchDays],
     );
     return rows;
   }
@@ -381,6 +507,7 @@ export class InvoiceService {
       [invoiceId, confirmed.toString(), pending.toString(), next, becamePaid, !!lastSeen && lastSeen > inv.expires_at],
     );
     let after = updated[0]!;
+    await this.releaseAddress(db, after);
     if (after.status === 'paid') {
       const credited = await this.deps.ledger.creditInvoice(db, after);
       if (credited > 0n) after = (await db.query<InvoiceRow>('SELECT * FROM invoices WHERE id = $1', [invoiceId])).rows[0]!;
@@ -388,6 +515,10 @@ export class InvoiceService {
     if (next !== inv.status) {
       const deposits = await this.deposits(db, invoiceId);
       await enqueueWebhook(db, inv.merchant_id, invoiceId, `invoice.${next}`, this.serialize(after, deposits));
+    } else if (BigInt(after.amount_received) > BigInt(inv.amount_received)) {
+      // More money confirmed without a status change (e.g. a top-up after `paid`): tell the merchant.
+      const deposits = await this.deposits(db, invoiceId);
+      await enqueueWebhook(db, inv.merchant_id, invoiceId, 'invoice.updated', this.serialize(after, deposits));
     }
     return after;
   }
@@ -409,6 +540,7 @@ export class InvoiceService {
         `UPDATE invoices SET status = 'cancelled', updated_at = now() WHERE id = $1 RETURNING *`,
         [invoiceId],
       );
+      await this.releaseAddress(db, up[0]!);
       await enqueueWebhook(db, inv.merchant_id, invoiceId, 'invoice.cancelled', this.serialize(up[0]!, []));
       return up[0]!;
     });
@@ -425,6 +557,7 @@ export class InvoiceService {
       if (BigInt(inv.amount_received) === 0n) throw new InvoiceError('Nothing confirmed on this invoice yet', 409, 'nothing_received');
       await db.query(`UPDATE invoices SET status = 'paid', paid_at = now(), updated_at = now() WHERE id = $1`, [invoiceId]);
       const { rows } = await db.query<InvoiceRow>('SELECT * FROM invoices WHERE id = $1', [invoiceId]);
+      await this.releaseAddress(db, rows[0]!);
       await this.deps.ledger.creditInvoice(db, rows[0]!);
       const after = (await db.query<InvoiceRow>('SELECT * FROM invoices WHERE id = $1', [invoiceId])).rows[0]!;
       await enqueueWebhook(db, inv.merchant_id, invoiceId, 'invoice.paid', this.serialize(after, await this.deposits(db, invoiceId)));
@@ -449,6 +582,7 @@ export class InvoiceService {
     return {
       id: inv.id,
       order_id: inv.order_id,
+      customer_id: inv.customer_id,
       description: inv.description,
       status: inv.status,
       price_amount: trimDecimal(inv.price_amount),

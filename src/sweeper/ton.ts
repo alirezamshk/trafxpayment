@@ -86,6 +86,10 @@ export class TonSigner implements ChainSigner {
     };
   }
 
+  async hotBalance(asset: AssetDef): Promise<bigint | null> {
+    return asset.contract ? null : this.client.getBalance(this.wallet.address);
+  }
+
   async txState(hash: string): Promise<TxState> {
     const m = /^ton-seqno:.*:(\d+)$/.exec(hash);
     if (!m) return 'unknown';

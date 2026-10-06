@@ -96,6 +96,12 @@ export class EvmSigner implements ChainSigner {
     return this.prepare(this.hot, { to: asset.contract, data, gasLimit: TOKEN_GAS_LIMIT, gasPrice });
   }
 
+  async hotBalance(asset: AssetDef): Promise<bigint> {
+    if (!asset.contract) return this.provider.getBalance(this.hotAddress);
+    const token = new Contract(asset.contract, ERC20, this.provider);
+    return (await token.getFunction('balanceOf')(this.hotAddress)) as bigint;
+  }
+
   async txState(hash: string): Promise<TxState> {
     const r = await this.provider.getTransactionReceipt(hash);
     if (r) return r.status === 1 ? 'success' : 'failed';

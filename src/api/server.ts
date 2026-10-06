@@ -50,6 +50,7 @@ async function publicView(inv: InvoiceRow) {
     token_contract: asset?.contract ?? null,
     address: s.address,
     memo: s.memo,
+    permanent_address: !!inv.customer_id && !inv.memo,
     pay_amount: s.pay_amount,
     amount_received: s.amount_received,
     amount_pending: s.amount_pending,

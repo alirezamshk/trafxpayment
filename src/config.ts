@@ -25,6 +25,11 @@ const schema = z.object({
   INVOICE_TTL_MINUTES: z.coerce.number().int().positive().default(30),
   LATE_PAYMENT_WINDOW_HOURS: z.coerce.number().nonnegative().default(24),
   UNDERPAY_TOLERANCE_PERCENT: z.coerce.number().min(0).max(100).default(0),
+  // Pool addresses (invoices without customer_id) are reused after this cool-down.
+  ADDRESS_POOL_COOLDOWN_HOURS: z.coerce.number().nonnegative().default(48),
+  ADDRESS_POOL_MAX: z.coerce.number().int().positive().default(1000),
+  // Permanent customer addresses stay monitored this long after their last invoice.
+  CUSTOMER_ADDRESS_WATCH_DAYS: z.coerce.number().nonnegative().default(30),
 
   // Watch-only extended public keys (account level). The API and watcher never need private keys.
   EVM_XPUB: optionalString, // m/44'/60'/0'

@@ -115,6 +115,29 @@ export class TronSigner implements ChainSigner {
       : this.sendTrx(this.hotAddress, this.hotKey, to, amount);
   }
 
+  async hotBalance(asset: AssetDef): Promise<bigint> {
+    return asset.contract
+      ? this.trc20Balance(asset.contract, this.hotAddress)
+      : BigInt(await this.tw.trx.getBalance(this.hotAddress));
+  }
+
+  /**
+   * After a USDT sweep the gas top-up is only partly burned; send the rest back. Plain TRX transfers
+   * use the address's free daily bandwidth, so this costs nothing; a small reserve covers the case
+   * where that bandwidth is used up.
+   */
+  async reclaimGas(index: number, depositAddress: string, record: (kind: 'gas_return', hash: string, amount: bigint) => Promise<void>) {
+    const k = this.keys.privateKey('tron', index);
+    if (k.address !== depositAddress) throw new Error(`Key mismatch for index ${index}`);
+    const trx = BigInt(await this.tw.trx.getBalance(depositAddress));
+    const reserve = 300_000n;
+    if (trx <= reserve + 1_000_000n) return;
+    const amount = trx - reserve;
+    const tx = await this.sendTrx(depositAddress, k.privateKey.slice(2), this.hotAddress, amount);
+    await record('gas_return', tx.hash, amount);
+    await tx.broadcast();
+  }
+
   async txState(hash: string): Promise<TxState> {
     const info = (await this.tw.trx.getTransactionInfo(hash).catch(() => ({}))) as {
       id?: string;

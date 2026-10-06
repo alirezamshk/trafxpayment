@@ -8,7 +8,8 @@
 | بخش | توضیح |
 |---|---|
 | شبکه‌ها | TRON (TRX، USDT‑TRC20)، Ethereum (ETH، USDT‑ERC20)، BSC (BNB، USDT‑BEP20)، Polygon (POL، USDT)، TON (TON، USDT‑TON) |
-| آدرس واریز | آدرس یکتای HD برای هر فاکتور (EVM/TRON)؛ برای TON آدرس خزانه + کامنت یکتا (Memo) |
+| آدرس واریز | آدرس دائمی برای هر مشتری پذیرنده (`customer_id`) یا استخر آدرس با دوره استراحت ۴۸ ساعته (EVM/TRON)؛ برای TON آدرس خزانه + کامنت یکتا (Memo) |
+| هزینه انتقال | پول روی آدرس‌ها جمع می‌شود و بالای «حد sweep» هر ارز یک‌جا منتقل می‌شود (پیش‌فرض USDT‑TRC20: ۱۰۰)؛ اگر کیف داغ برای تسویه کم بیاورد، زودتر sweep می‌شود؛ TRX باقی‌مانده برمی‌گردد |
 | تایید خودکار | شمارش تاییدیه، کشف reorg و تراکنش ناموفق، رد USDT جعلی (فقط قرارداد رسمی)، پرداخت ناقص/اضافه/دیرهنگام |
 | قیمت | فاکتور به USD (یا هر ارز فیات CoinGecko) یا مستقیم به رمزارز؛ نرخ هنگام صدور قفل می‌شود |
 | چندپذیرنده | هر پذیرنده: پنل، چند کلید API، Webhook امضاشده، کارمزد اختصاصی، زمان‌بندی تسویه، آدرس تسویه برای هر ارز |
@@ -59,7 +60,7 @@ sudo bash install.sh
 
 | متد | مسیر | توضیح |
 |---|---|---|
-| POST | `/v1/invoices` | ساخت فاکتور: `price_amount`, `price_currency`, `asset?`, `order_id?`, `description?`, `success_url?`, `cancel_url?`, `metadata?`, `expires_in_minutes?` |
+| POST | `/v1/invoices` | ساخت فاکتور: `price_amount`, `price_currency`, `asset?`, `customer_id?`, `order_id?`, `description?`, `success_url?`, `cancel_url?`, `metadata?`, `expires_in_minutes?` |
 | GET | `/v1/invoices/:id` | وضعیت + تراکنش‌ها |
 | GET | `/v1/invoices?status=&limit=&before=` | فهرست |
 | POST | `/v1/invoices/:id/cancel` | لغو (فقط بدون پرداخت) |
@@ -73,16 +74,17 @@ sudo bash install.sh
 ### Webhook
 
 هدرها: `x-webhook-id`، `x-webhook-timestamp`، `x-webhook-signature` = `HMAC_SHA256(secret, timestamp + "." + body)`.
-رویدادها: `invoice.confirming|paid|partially_paid|expired|cancelled`، `payout.created|completed|failed|rejected`.
+رویدادها: `invoice.confirming|paid|partially_paid|expired|cancelled|updated`، `payout.created|completed|failed|rejected`.
 پاسخ غیر 2xx تا `WEBHOOK_MAX_ATTEMPTS` بار با تاخیر افزایشی تکرار می‌شود. نمونه کد Node و PHP در تب «راهنمای اتصال» پنل هست.
 
 ## جریان پول
 
 1. فاکتور `paid` می‌شود ← در ledger: `+payment` و `-fee` (درصد کارمزد پذیرنده در لحظه ثبت).
 2. پرداخت اضافه یا دیرهنگام بعد از `paid` هم (منهای کارمزد) اعتبار می‌گیرد.
-3. در ساعت `SETTLEMENT_HOUR_UTC` برای پذیرندگان سررسیده، کل موجودی هر ارز (اگر ≥ حداقل) به یک payout تبدیل و از موجودی کسر (رزرو) می‌شود.
-4. با `PAYOUT_REQUIRE_APPROVAL=true` مدیر تایید می‌کند؛ signer از کیف داغ ارسال و تا تایید روی شبکه پیگیری می‌کند.
-5. رد یا شکست تسویه ← `payout_reversal` و برگشت مبلغ به موجودی.
+3. `customer_id` را همیشه از جلسه کاربر در سرور پذیرنده بفرستید، نه از ورودی کاربر؛ پرداخت دوباره به آدرس دائمی بعد از `paid` با `invoice.updated` اطلاع داده می‌شود.
+4. در ساعت `SETTLEMENT_HOUR_UTC` برای پذیرندگان سررسیده، کل موجودی هر ارز (اگر ≥ حداقل) منهای «کارمزد شبکه تسویه» آن ارز به یک payout تبدیل و از موجودی کسر (رزرو) می‌شود. حد sweep و کارمزد شبکه هر ارز در تب «تنظیمات ارزها» پنل مدیر قابل تغییر است.
+5. با `PAYOUT_REQUIRE_APPROVAL=true` مدیر تایید می‌کند؛ signer از کیف داغ ارسال و تا تایید روی شبکه پیگیری می‌کند.
+6. رد یا شکست تسویه ← `payout_reversal` و برگشت مبلغ به موجودی.
 
 داشبورد مدیر «بدهی به پذیرندگان» را نشان می‌دهد: حداقل مبلغی که باید در کیف داغ باشد.
 

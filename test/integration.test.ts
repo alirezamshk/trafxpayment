@@ -62,7 +62,8 @@ describe('invoice lifecycle + ledger', () => {
     await pool.query(`INSERT INTO payout_addresses (merchant_id, asset, address) VALUES ($1, 'USDT_TRC20', 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t')`, [m.id]);
     const payouts = await ledger.runSettlements(new Date(Date.now() + 2 * 86400_000));
     expect(payouts).toHaveLength(1);
-    expect(payouts[0]!.amount).toBe('107800000');
+    expect(payouts[0]!.amount).toBe('106800000'); // minus 1 USDT network fee (TRC20 default)
+    expect(payouts[0]!.fee).toBe('1000000');
     expect(payouts[0]!.status).toBe('pending_approval');
     expect((await ledger.balances(pool, m.id))[0]!.balance).toBe(0n);
     // Not due twice in the same period.
@@ -73,6 +74,7 @@ describe('invoice lifecycle + ledger', () => {
     expect((await ledger.balances(pool, m.id))[0]!.balance).toBe(107_800_000n);
     const summary = await ledger.platformSummary(pool);
     expect(summary[0]!.fees).toBe('2200000');
+    expect(summary[0]!.payout_fees).toBe('0'); // refunded with the rejected payout
   });
 
   it('handles partial payment, orphaned deposits, expiry and manual acceptance', async () => {
@@ -249,5 +251,125 @@ describe('webhook dispatcher', () => {
     const c = calls[1]!;
     expect(verifySignature(m.webhook_secret, c.body, c.headers['x-webhook-timestamp']!, c.headers['x-webhook-signature']!)).toBe(true);
     expect(JSON.parse(c.body).event).toBe('invoice.cancelled');
+  });
+});
+
+describe('deposit address reuse', () => {
+  it('reuses pool addresses only after the cool-down and credits late payments to the last invoice', async () => {
+    const m = await merchant();
+    const a = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    await invoices.recordDeposit({ invoiceId: a.id, chain: 'tron', asset: 'USDT_TRC20', txHash: 'r1', eventIndex: '0', from: 'X', to: a.address!, amount: 5_000_000n, confirmed: true });
+    expect((await invoices.get(pool, a.id))!.status).toBe('paid');
+
+    // Released, but resting: a new invoice gets a different address.
+    const b = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    expect(b.address).not.toBe(a.address);
+
+    // A late payment to A's address is still credited to invoice A.
+    const watched = await invoices.watched(pool, 'tron');
+    expect(watched.find((w) => w.address === a.address)!.id).toBe(a.id);
+
+    // After the cool-down the address comes back for the next invoice.
+    await pool.query(`UPDATE deposit_addresses SET released_at = now() - interval '49 hours' WHERE address = $1`, [a.address]);
+    const c = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    expect(c.address).toBe(a.address);
+    expect(c.derivation_index).toBe(a.derivation_index);
+    expect((await invoices.watched(pool, 'tron')).find((w) => w.address === a.address)!.id).toBe(c.id);
+
+    // Pools are per merchant: another merchant never receives this address.
+    const other = await merchant();
+    await pool.query(`UPDATE deposit_addresses SET released_at = now() - interval '49 hours'`);
+    const d = await invoices.create(other.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    expect([a.address, b.address]).not.toContain(d.address);
+  });
+
+  it('enforces the pool limit', async () => {
+    const m = await merchant();
+    const { InvoiceService } = await import('../src/services/invoices.js');
+    const { rates } = await import('../src/services/index.js');
+    const small = new InvoiceService({ registry, rates, ledger, wallet: (await import('../src/context.js')).walletFor, poolMax: 1 });
+    await small.create(m.id, { price_amount: '1', price_currency: 'USD', asset: 'USDT_TRC20' });
+    await expect(small.create(m.id, { price_amount: '1', price_currency: 'USD', asset: 'USDT_TRC20' })).rejects.toThrow(/No free deposit address/);
+  });
+
+  it('gives each customer a permanent address and one open invoice at a time', async () => {
+    const m = await merchant();
+    const a = await invoices.create(m.id, { price_amount: '4', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: 'user-42' });
+    const b = await invoices.create(m.id, { price_amount: '6', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: 'user-42' });
+    expect(b.address).toBe(a.address);
+    expect((await invoices.get(pool, a.id))!.status).toBe('cancelled'); // unpaid predecessor dropped
+    const other = await invoices.create(m.id, { price_amount: '6', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: 'user-43' });
+    expect(other.address).not.toBe(a.address);
+
+    // Payment in flight on b blocks a third invoice for the same customer.
+    await invoices.recordDeposit({ invoiceId: b.id, chain: 'tron', asset: 'USDT_TRC20', txHash: 'c1', eventIndex: '0', from: 'X', to: b.address!, amount: 6_000_000n });
+    await expect(invoices.create(m.id, { price_amount: '1', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: 'user-42' })).rejects.toThrow(/payment in progress/);
+
+    // Once paid, a repeat payment without a new invoice is credited to b and reported.
+    const { rows } = await pool.query<{ id: string }>(`SELECT id FROM deposits WHERE tx_hash = 'c1'`);
+    await invoices.updateDepositConfirmations(rows[0]!.id, 19, 'confirmed');
+    expect((await invoices.get(pool, b.id))!.status).toBe('paid');
+    await pool.query(`UPDATE deposit_addresses SET released_at = now() - interval '10 days' WHERE customer_id = 'user-42'`);
+    const w = (await invoices.watched(pool, 'tron')).find((x) => x.address === b.address);
+    expect(w!.id).toBe(b.id); // still watched (30-day customer window)
+    await invoices.recordDeposit({ invoiceId: b.id, chain: 'tron', asset: 'USDT_TRC20', txHash: 'c2', eventIndex: '0', from: 'X', to: b.address!, amount: 3_000_000n, confirmed: true });
+    expect((await invoices.get(pool, b.id))!.amount_received).toBe('9000000');
+    expect(await events(b.id)).toContain('invoice.updated');
+
+    // A new invoice for the customer reuses the same permanent address.
+    const c = await invoices.create(m.id, { price_amount: '1', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: 'user-42' });
+    expect(c.address).toBe(a.address);
+    expect(c.customer_id).toBe('user-42');
+  });
+});
+
+describe('sweep threshold and liquidity', () => {
+  it('sweeps only above the threshold unless approved payouts need the funds', async () => {
+    const { SweepJob } = await import('../src/sweeper/signer.js');
+    const m = await merchant();
+    const swept: string[] = [];
+    let hot = 0n;
+    const signer = {
+      chain: 'tron',
+      hotAddress: 'THot',
+      validateAddress: () => true,
+      txState: async () => 'pending' as const,
+      preparePayout: async () => { throw new Error('unused'); },
+      hotBalance: async () => hot,
+      sweep: async (_i: number, addr: string) => {
+        swept.push(addr);
+        return 'swept' as const;
+      },
+    };
+    const job = new SweepJob([signer], registry, ledger.settings, silent);
+    const mk = async (cust: string, amount: bigint, tx: string) => {
+      const inv = await invoices.create(m.id, { price_amount: '1', price_currency: 'USD', asset: 'USDT_TRC20', customer_id: cust });
+      await invoices.recordDeposit({ invoiceId: inv.id, chain: 'tron', asset: 'USDT_TRC20', txHash: tx, eventIndex: '0', from: 'X', to: inv.address!, amount, confirmed: true });
+      return inv.address!;
+    };
+    const small = await mk('u1', 40_000_000n, 's1'); // 40 USDT < 100 threshold
+    const big = await mk('u2', 150_000_000n, 's2'); // 150 USDT
+    await job.tick();
+    expect(swept).toEqual([big]);
+
+    // An approved 180 USDT payout with an empty hot wallet needs more than the big address holds,
+    // so the small address is swept early as well.
+    await pool.query(
+      `INSERT INTO payouts (merchant_id, asset, chain, address, amount, fee, status) VALUES ($1, 'USDT_TRC20', 'tron', 'TDest', 180000000, 1000000, 'approved')`,
+      [m.id],
+    );
+    hot = 0n;
+    swept.length = 0;
+    await pool.query(`DELETE FROM sweeps`);
+    await job.tick();
+    expect(swept).toContain(small);
+
+    // Raising the threshold via settings keeps it waiting again.
+    await pool.query(`DELETE FROM payouts`);
+    await ledger.settings.set(pool, 'USDT_TRC20', 500_000_000n, 1_000_000n);
+    swept.length = 0;
+    await pool.query(`DELETE FROM sweeps`);
+    await job.tick();
+    expect(swept).toEqual([]);
   });
 });

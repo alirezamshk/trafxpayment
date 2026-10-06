@@ -125,9 +125,12 @@ export function parseTrx(items: TronTx[], address: string, asset: AssetDef): Tro
   return out;
 }
 
+const IDLE_POLL_MS = 5 * 60_000;
+
 export class TronWatcher implements Watcher {
   readonly name = 'tron';
   readonly intervalMs = config.TRON_POLL_INTERVAL_MS;
+  private readonly lastPolled = new Map<string, number>();
 
   constructor(
     private readonly chain: ChainDef,
@@ -147,8 +150,14 @@ export class TronWatcher implements Watcher {
     const usdt = this.assets.find((a) => a.contract);
     const trx = this.assets.find((a) => !a.contract);
 
+    const now = Date.now();
     for (const inv of watched) {
       const address = inv.address!;
+      // Addresses with an open invoice are polled every tick; idle ones (late / repeat payments on
+      // permanent customer addresses) every few minutes, to stay inside TronGrid rate limits.
+      const open = ['pending', 'confirming', 'partially_paid'].includes(inv.status) && inv.expires_at.getTime() > now;
+      if (!open && now - (this.lastPolled.get(address) ?? 0) < IDLE_POLL_MS) continue;
+      this.lastPolled.set(address, now);
       const since = inv.created_at.getTime() - 60_000;
       const found: TronDetected[] = [];
       try {

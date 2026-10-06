@@ -32,7 +32,7 @@ async function boot() {
   catch { $('#login').classList.remove('hidden'); return; }
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  tabs($('#tabs'), [['summary', 'خلاصه'], ['merchants', 'پذیرندگان'], ['payouts', 'تسویه‌ها'], ['invoices', 'فاکتورها'], ['unmatched', 'واریزهای نامشخص'], ['webhooks', 'وبهوک‌های ناموفق']],
+  tabs($('#tabs'), [['summary', 'خلاصه'], ['merchants', 'پذیرندگان'], ['payouts', 'تسویه‌ها'], ['invoices', 'فاکتورها'], ['unmatched', 'واریزهای نامشخص'], ['assets', 'تنظیمات ارزها'], ['webhooks', 'وبهوک‌های ناموفق']],
     (t) => VIEWS[t]().catch((e) => showMsg(view(), e.message)));
 }
 $('#loginForm').addEventListener('submit', async (e) => {
@@ -54,7 +54,7 @@ const VIEWS = {
         <div class="stat"><span class="muted">واریز نامشخص</span><b>${summary.unmatched_deposits}</b></div>
       </div><br>
       <div class="card"><h2>درآمد و بدهی به پذیرندگان</h2>
-        ${table(['ارز', 'حجم کل دریافتی', 'درآمد کارمزد شما', 'بدهی به پذیرندگان'], summary.assets.map((a) => [esc(a.asset), `<span class="mono">${esc(a.volume)}</span>`, `<b class="mono">${esc(a.platform_fees)}</b>`, `<span class="mono">${esc(a.merchant_balances)}</span>`]))}
+        ${table(['ارز', 'حجم کل دریافتی', 'درآمد کارمزد شما', 'کارمزد شبکه تسویه', 'بدهی به پذیرندگان'], summary.assets.map((a) => [esc(a.asset), `<span class="mono">${esc(a.volume)}</span>`, `<b class="mono">${esc(a.platform_fees)}</b>`, `<span class="mono">${esc(a.payout_fees)}</span>`, `<span class="mono">${esc(a.merchant_balances)}</span>`]))}
         <p class="small muted">«بدهی به پذیرندگان» مبلغی است که باید در کیف پول داغ برای تسویه موجود باشد.</p></div>
       <div class="card"><h2>شبکه‌های فعال</h2><p>${summary.available_assets.map((a) => `<span class="badge">${esc(a.id)}</span>`).join(' ') || 'هیچ'}</p></div>`;
   },
@@ -93,8 +93,8 @@ const VIEWS = {
     view().innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">تسویه‌ها</h2>
         <select id="pStatus" style="max-width:220px"><option value="">همه</option>${['pending_approval', 'approved', 'sending', 'sent', 'completed', 'failed', 'rejected'].map((s) => `<option value="${s}" ${s === status ? 'selected' : ''}>${STATUS_FA[s]}</option>`).join('')}</select>
         <button class="secondary small" id="runSettle">اجرای تسویه‌های سررسید</button></div><div id="pMsg"></div><br>
-      ${table(['تاریخ', 'پذیرنده', 'ارز', 'مبلغ', 'آدرس', 'وضعیت', 'تراکنش / خطا', ''], r.data.map((p) => [
-        fmtDate(p.created_at), esc(p.merchant_name), esc(p.asset), `<b class="mono">${esc(p.amount)}</b>`, copyBox(p.address), badge(p.status),
+      ${table(['تاریخ', 'پذیرنده', 'ارز', 'مبلغ', 'کارمزد شبکه', 'آدرس', 'وضعیت', 'تراکنش / خطا', ''], r.data.map((p) => [
+        fmtDate(p.created_at), esc(p.merchant_name), esc(p.asset), `<b class="mono">${esc(p.amount)}</b>`, `<span class="mono">${esc(p.fee)}</span>`, copyBox(p.address), badge(p.status),
         `<span class="mono small">${esc(p.tx_hash ? short(p.tx_hash) : '')}</span> <span class="small" style="color:var(--err)">${esc(p.error || '')}</span>`,
         (p.status === 'pending_approval' ? `<button class="small" data-approve="${esc(p.id)}">تایید</button> ` : '') +
         (['pending_approval', 'approved', 'sending'].includes(p.status) ? `<button class="small danger" data-reject="${esc(p.id)}">رد</button>` : '')]))}</div>`;
@@ -129,6 +129,26 @@ const VIEWS = {
     view().innerHTML = `<div class="card"><h2>واریزهای نامشخص</h2><p class="muted small">واریزهایی که به فاکتوری نسبت داده نشدند (ارز یا شبکه اشتباه، کامنت TON نادرست). پس از بررسی، با «اصلاحیه موجودی» در بخش پذیرندگان رسیدگی کنید.</p>
       ${table(['تاریخ', 'شبکه', 'ارز', 'مبلغ', 'از', 'به', 'Memo', 'تراکنش'], r.data.map((d) => [fmtDate(d.detected_at), esc(d.chain), esc(d.asset), `<span class="mono">${esc(d.amount)}</span>`,
         `<span class="mono">${esc(short(d.from_address))}</span>`, `<span class="mono">${esc(short(d.to_address))}</span>`, `<span class="mono">${esc(d.memo || '')}</span>`, copyBox(d.tx_hash)]))}</div>`;
+  },
+
+  async assets() {
+    const r = await api('GET', '/api/admin/asset-settings');
+    view().innerHTML = `<div class="card"><h2>تنظیمات ارزها</h2>
+      <p class="muted small"><b>حد sweep:</b> پول روی آدرس‌های واریز جمع می‌ماند تا به این مقدار برسد و بعد یک‌جا به کیف داغ منتقل می‌شود (۰ = فوری). برای USDT-TRC20 که هر انتقال چند دلار هزینه دارد، حد بالاتر یعنی هزینه کمتر. اگر برای تسویه‌ای پول کافی در کیف داغ نباشد، آدرس‌ها زودتر sweep می‌شوند.<br>
+      <b>کارمزد شبکه تسویه:</b> مبلغی که از هر تسویه پذیرنده بابت هزینه انتقال کسر می‌شود.</p>
+      ${table(['ارز', 'حد sweep', 'کارمزد شبکه تسویه', ''], r.data.map((a) => [
+        esc(a.asset),
+        `<input class="ltr" style="max-width:140px" data-sweep="${esc(a.asset)}" value="${esc(a.sweep_threshold)}">`,
+        `<input class="ltr" style="max-width:140px" data-fee="${esc(a.asset)}" value="${esc(a.payout_fee)}">`,
+        `<button class="small" data-save="${esc(a.asset)}">ذخیره</button>`]))}
+      <div id="asMsg"></div></div>`;
+    view().querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', async () => {
+      const a = b.dataset.save;
+      try {
+        await api('PUT', '/api/admin/asset-settings', { asset: a, sweep_threshold: $(`[data-sweep="${a}"]`).value.trim(), payout_fee: $(`[data-fee="${a}"]`).value.trim() });
+        showMsg($('#asMsg'), `${a} ذخیره شد`, 'ok');
+      } catch (e) { showMsg($('#asMsg'), e.message); }
+    }));
   },
 
   async webhooks() {

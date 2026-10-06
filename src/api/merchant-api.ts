@@ -19,6 +19,7 @@ export const createInvoiceSchema = z.object({
   cancel_url: z.string().url().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   expires_in_minutes: z.number().int().optional(),
+  customer_id: z.string().max(128).optional(),
 });
 
 export const listQuery = z.object({

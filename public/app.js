@@ -27,7 +27,7 @@ const STATUS_FA = {
   sending: 'در حال ارسال', sent: 'ارسال شده', completed: 'تکمیل شده', failed: 'ناموفق', rejected: 'رد شده',
   confirmed: 'تایید شده', orphaned: 'نامعتبر', delivered: 'تحویل شده',
 };
-const LEDGER_FA = { payment: 'دریافت', fee: 'کارمزد', payout: 'تسویه', payout_reversal: 'برگشت تسویه', adjustment: 'اصلاحیه' };
+const LEDGER_FA = { payment: 'دریافت', fee: 'کارمزد', payout: 'تسویه', payout_fee: 'کارمزد شبکه تسویه', payout_reversal: 'برگشت تسویه', adjustment: 'اصلاحیه' };
 const SCHEDULE_FA = { daily: 'روزانه', weekly: 'هفتگی', manual: 'دستی (درخواستی)' };
 const WEEKDAYS_FA = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه'];
 

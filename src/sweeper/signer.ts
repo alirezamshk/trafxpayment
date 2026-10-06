@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { pool } from '../db.js';
-import { findAsset, type Registry } from '../chains/assets.js';
+import { findAsset, type AssetDef, type Registry } from '../chains/assets.js';
+import type { AssetSettingsService } from '../services/asset-settings.js';
 import type { LedgerService, PayoutRow } from '../services/ledger.js';
 import { enqueueWebhook } from '../services/webhooks.js';
 import type { Logger, Watcher } from '../watchers/types.js';
@@ -8,7 +9,12 @@ import type { ChainSigner } from './types.js';
 
 const STUCK_MS = 30 * 60_000;
 
-/** Moves confirmed deposits from per-invoice addresses to the hot wallet (EVM + TRON). */
+/**
+ * Moves confirmed deposits from deposit addresses to the hot wallet (EVM + TRON).
+ * An address is swept once its unswept balance of an asset reaches that asset's sweep threshold
+ * (expensive TRC20/ERC20 transfers are batched this way), or earlier when approved payouts need
+ * more than the hot wallet holds — then the fullest addresses are swept first.
+ */
 export class SweepJob implements Watcher {
   readonly name = 'sweep';
   readonly intervalMs = config.SWEEP_INTERVAL_MS;
@@ -16,6 +22,7 @@ export class SweepJob implements Watcher {
   constructor(
     private readonly signers: ChainSigner[],
     private readonly registry: Registry,
+    private readonly settings: AssetSettingsService,
     private readonly log: Logger,
   ) {}
 
@@ -30,27 +37,56 @@ export class SweepJob implements Watcher {
     }
   }
 
+  /** How much more the hot wallet needs to cover approved payouts of `asset` (0 if enough). */
+  private async shortfall(signer: ChainSigner, asset: AssetDef): Promise<bigint> {
+    const { rows } = await pool.query<{ total: string }>(
+      `SELECT COALESCE(SUM(amount + fee), 0) AS total FROM payouts WHERE chain = $1 AND asset = $2 AND status = 'approved'`,
+      [signer.chain, asset.id],
+    );
+    const needed = BigInt(rows[0]!.total);
+    if (needed === 0n) return 0n;
+    const have = await signer.hotBalance(asset);
+    return have === null || have >= needed ? 0n : needed - have;
+  }
+
   private async sweepChain(signer: ChainSigner): Promise<void> {
-    const { rows } = await pool.query<{ to_address: string; asset: string; derivation_index: string }>(
-      `SELECT d.to_address, d.asset, MIN(i.derivation_index) AS derivation_index
+    const family = signer.chain === 'tron' ? 'tron' : 'evm';
+    const { rows } = await pool.query<{ to_address: string; asset: string; derivation_index: string; unswept: string }>(
+      `SELECT d.to_address, d.asset, MIN(da.derivation_index) AS derivation_index, SUM(d.amount) AS unswept
        FROM deposits d
-       JOIN invoices i ON i.chain = d.chain AND lower(i.address) = lower(d.to_address) AND i.memo IS NULL
+       JOIN deposit_addresses da ON da.family = $2 AND lower(da.address) = lower(d.to_address)
        WHERE d.chain = $1 AND d.status = 'confirmed' AND d.swept_at IS NULL
        GROUP BY d.to_address, d.asset
-       LIMIT 50`,
-      [signer.chain],
+       ORDER BY SUM(d.amount) DESC`,
+      [signer.chain, family],
     );
+
+    const perAsset = new Map<string, { threshold: bigint; shortfall: bigint }>();
     for (const g of rows) {
       const asset = findAsset(this.registry, g.asset);
       if (!asset) continue;
-      if (await this.inFlight(signer, g.to_address, g.asset)) continue;
+      let st = perAsset.get(asset.id);
+      if (!st) {
+        const { sweepThreshold } = await this.settings.get(pool, asset.id);
+        st = { threshold: sweepThreshold, shortfall: await this.shortfall(signer, asset) };
+        perAsset.set(asset.id, st);
+      }
+      const unswept = BigInt(g.unswept);
+      const forced = st.shortfall > 0n;
+      if (!forced && unswept < st.threshold) continue; // keep accumulating
+      if (forced) st.shortfall -= unswept < st.shortfall ? unswept : st.shortfall;
 
-      const record = async (kind: 'gas_topup' | 'sweep', hash: string, amount: bigint) => {
+      if (await this.inFlight(signer, g.to_address, asset, Number(g.derivation_index))) continue;
+
+      const record = async (kind: 'gas_topup' | 'sweep' | 'gas_return', hash: string, amount: bigint) => {
         await pool.query(
           `INSERT INTO sweeps (chain, address, asset, kind, tx_hash, amount) VALUES ($1, $2, $3, $4, $5, $6)`,
           [signer.chain, g.to_address, g.asset, kind, hash, amount.toString()],
         );
-        this.log.info({ chain: signer.chain, address: g.to_address, asset: g.asset, kind, tx: hash }, 'sweep tx sent');
+        this.log.info(
+          { chain: signer.chain, address: g.to_address, asset: g.asset, kind, tx: hash, forced },
+          'sweep tx sent',
+        );
       };
       const result = await signer.sweep(Number(g.derivation_index), g.to_address, asset, record);
       if (result === 'empty') await this.markSwept(signer.chain, g.to_address, g.asset, new Date());
@@ -58,17 +94,31 @@ export class SweepJob implements Watcher {
   }
 
   /** True while a previous gas top-up or sweep for this address is unresolved. */
-  private async inFlight(signer: ChainSigner, address: string, asset: string): Promise<boolean> {
+  private async inFlight(signer: ChainSigner, address: string, asset: AssetDef, index: number): Promise<boolean> {
     const { rows } = await pool.query<{ id: string; kind: string; tx_hash: string; created_at: Date }>(
       `SELECT id, kind, tx_hash, created_at FROM sweeps WHERE chain = $1 AND address = $2 AND asset = $3 AND status = 'sent'`,
-      [signer.chain, address, asset],
+      [signer.chain, address, asset.id],
     );
     let busy = false;
     for (const s of rows) {
       const state = await signer.txState(s.tx_hash);
       if (state === 'success') {
         await pool.query(`UPDATE sweeps SET status = 'confirmed' WHERE id = $1`, [s.id]);
-        if (s.kind === 'sweep') await this.markSwept(signer.chain, address, asset, s.created_at);
+        if (s.kind === 'sweep') {
+          await this.markSwept(signer.chain, address, asset.id, s.created_at);
+          if (asset.contract && signer.reclaimGas) {
+            await signer
+              .reclaimGas(index, address, async (kind, hash, amount) => {
+                // Logged as already confirmed: nothing depends on tracking it further.
+                await pool.query(
+                  `INSERT INTO sweeps (chain, address, asset, kind, tx_hash, amount, status) VALUES ($1, $2, $3, $4, $5, $6, 'confirmed')`,
+                  [signer.chain, address, asset.id, kind, hash, amount.toString()],
+                );
+                this.log.info({ chain: signer.chain, address, kind, tx: hash, amount: amount.toString() }, 'leftover gas returned');
+              })
+              .catch((err: Error) => this.log.warn({ chain: signer.chain, address, err: err.message }, 'gas reclaim failed'));
+          }
+        }
       } else if (state === 'failed' || (state === 'unknown' && Date.now() - s.created_at.getTime() > STUCK_MS)) {
         await pool.query(`UPDATE sweeps SET status = 'failed', error = $2 WHERE id = $1`, [s.id, state]);
         this.log.warn({ chain: signer.chain, tx: s.tx_hash, state }, 'sweep tx failed');
@@ -122,6 +172,14 @@ export class PayoutJob implements Watcher {
       if ('serial' in signer && signer.serial) {
         const { rows: busy } = await pool.query(`SELECT 1 FROM payouts WHERE chain = $1 AND status IN ('sending','sent') LIMIT 1`, [p.chain]);
         if (busy.length) continue;
+      }
+
+      // Wait (without consuming an attempt) until sweeps have filled the hot wallet.
+      const have = await signer.hotBalance(asset).catch(() => null);
+      const need = BigInt(p.amount) + (asset.contract ? 0n : BigInt(p.fee));
+      if (have !== null && have < need) {
+        await pool.query(`UPDATE payouts SET error = $2 WHERE id = $1`, [p.id, 'waiting for hot wallet liquidity (sweeping deposits)']);
+        continue;
       }
 
       let prepared;

@@ -118,7 +118,12 @@ export async function payoutAddressesView(merchantId: string) {
 export async function panelRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireMerchantSession);
 
-  app.get('/me', async (req) => ({ merchant: merchantView(req.merchant!), assets: invoices.availableAssets(), settlement_hour_utc: config.SETTLEMENT_HOUR_UTC }));
+  app.get('/me', async (req) => ({
+    merchant: merchantView(req.merchant!),
+    assets: invoices.availableAssets(),
+    asset_settings: await ledger.settings.view(pool, invoices.availableAssets().map((x) => x.id)),
+    settlement_hour_utc: config.SETTLEMENT_HOUR_UTC,
+  }));
 
   app.patch('/settings', async (req) => {
     const b = parse(settingsSchema, req.body);

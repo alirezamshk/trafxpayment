@@ -96,11 +96,12 @@ const VIEWS = {
     const [p, b] = await Promise.all([api('GET', '/api/panel/payouts'), api('GET', '/api/panel/balances')]);
     view().innerHTML = `
       <div class="card"><h2>درخواست تسویه فوری</h2>
+        <p class="muted small">کارمزد شبکه هر تسویه از مبلغ کسر می‌شود (تب آدرس‌های تسویه). برای کمتر شدن هزینه، تسویه هفتگی یا حداقل مبلغ بالاتر را انتخاب کنید.</p>
         <form id="reqPayout" class="row"><select name="asset" style="max-width:260px">${b.data.map((x) => `<option value="${esc(x.asset)}">${esc(x.asset)} — ${esc(x.balance)}</option>`).join('')}</select><button>درخواست</button></form>
         <div id="pMsg"></div>
       </div>
-      <div class="card"><h2>تاریخچه تسویه</h2>${table(['تاریخ', 'ارز', 'مبلغ', 'آدرس', 'وضعیت', 'تراکنش'],
-        p.data.map((x) => [fmtDate(x.created_at), esc(x.asset), `<span class="mono">${esc(x.amount)}</span>`, `<span class="mono">${esc(short(x.address))}</span>`, badge(x.status), x.tx_hash ? `<span class="mono">${esc(short(x.tx_hash))}</span>` : '—']))}</div>
+      <div class="card"><h2>تاریخچه تسویه</h2>${table(['تاریخ', 'ارز', 'مبلغ', 'کارمزد شبکه', 'آدرس', 'وضعیت', 'تراکنش'],
+        p.data.map((x) => [fmtDate(x.created_at), esc(x.asset), `<span class="mono">${esc(x.amount)}</span>`, `<span class="mono">${esc(x.fee)}</span>`, `<span class="mono">${esc(short(x.address))}</span>`, badge(x.status), x.tx_hash ? `<span class="mono">${esc(short(x.tx_hash))}</span>` : '—']))}</div>
       <div class="card"><h2>گردش حساب</h2><div id="ledger"></div></div>`;
     $('#reqPayout').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -116,7 +117,8 @@ const VIEWS = {
     const a = await api('GET', '/api/panel/payout-addresses');
     view().innerHTML = `
       <div class="card"><h2>آدرس کیف پول برای تسویه</h2>
-        <p class="muted small">موجودی هر ارز طبق زمان‌بندی به آدرس همان ارز واریز می‌شود. اگر موجودی کمتر از «حداقل» باشد به دوره بعد منتقل می‌شود.</p>
+        <p class="muted small">موجودی هر ارز طبق زمان‌بندی به آدرس همان ارز واریز می‌شود. اگر موجودی کمتر از «حداقل» باشد به دوره بعد منتقل می‌شود.
+        از هر تسویه، کارمزد شبکه کسر می‌شود: ${me.asset_settings.map((x) => `<span class="badge">${esc(x.asset)}: ${esc(x.payout_fee)}</span>`).join(' ')}</p>
         <form id="addrForm" class="grid">
           <div><label>ارز</label><select name="asset">${assetOptions()}</select></div>
           <div style="grid-column:span 2"><label>آدرس</label><input name="address" class="ltr" required></div>
@@ -200,12 +202,15 @@ const VIEWS = {
 <pre>curl -X POST ${esc(base)}/v1/invoices \\
   -H "Authorization: Bearer txp_..." \\
   -H "Content-Type: application/json" \\
-  -d '{"price_amount":"25","price_currency":"USD","order_id":"1001",
+  -d '{"price_amount":"25","price_currency":"USD","order_id":"1001","customer_id":"user-42",
        "success_url":"https://shop.example/thanks","metadata":{"user":42}}'</pre>
       <p class="small muted">اگر <code>asset</code> (مثلاً <code>USDT_TRC20</code>) را نفرستید، مشتری ارز را در صفحه پرداخت انتخاب می‌کند.</p>
+      <p class="small"><b>پیشنهاد مهم:</b> شناسه کاربر خودتان را در <code>customer_id</code> بفرستید (مثلاً <code>"customer_id":"user-42"</code>). هر کاربر یک آدرس واریز دائمی می‌گیرد و پرداخت‌های بعدی یا دیرهنگامش همیشه به حساب خودش ثبت می‌شود. هر کاربر هم‌زمان یک فاکتور باز دارد؛ فاکتور پرداخت‌نشده قبلی با ساخت فاکتور جدید لغو می‌شود.</p>
+      <div class="alert warn small"><b>امنیت:</b> <code>customer_id</code> را همیشه از جلسه کاربرِ واردشده در سرور خودتان بفرستید، هرگز از ورودی فرم، URL یا مرورگر کاربر. وگرنه کاربر می‌تواند شناسه دیگری بفرستد و پرداختش به حساب نفر دیگری ثبت شود.</div>
+      <p class="small">اگر پس از «پرداخت شده» مبلغ بیشتری به همان فاکتور برسد (مثلاً کاربر دوباره به آدرس دائمی‌اش واریز کند)، رویداد <code>invoice.updated</code> با <code>amount_received</code> جدید ارسال می‌شود؛ اختلاف را به حساب کاربر اضافه کنید.</p>
       <h3>استعلام</h3><pre>GET ${esc(base)}/v1/invoices/{id}</pre>
       <h3>Webhook</h3>
-      <p class="small">رویدادها: <code>invoice.confirming</code>، <code>invoice.paid</code>، <code>invoice.partially_paid</code>، <code>invoice.expired</code>، <code>invoice.cancelled</code>، <code>payout.created</code>، <code>payout.completed</code>، <code>payout.failed</code></p>
+      <p class="small">رویدادها: <code>invoice.confirming</code>، <code>invoice.paid</code>، <code>invoice.partially_paid</code>، <code>invoice.expired</code>، <code>invoice.cancelled</code>، <code>invoice.updated</code>، <code>payout.created</code>، <code>payout.completed</code>، <code>payout.failed</code></p>
 <pre>// Node.js — بررسی امضا
 const sig = crypto.createHmac('sha256', WEBHOOK_SECRET)
   .update(req.headers['x-webhook-timestamp'] + '.' + rawBody).digest('hex');
