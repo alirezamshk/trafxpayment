@@ -1,0 +1,2 @@
+# Cloudflare Origin Certificate for CADDY_TLS=origin (never commit the key)
+*.pem

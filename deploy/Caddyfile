@@ -18,6 +18,12 @@
 	tls internal
 }
 
+# Behind Cloudflare with SSL mode "Full (strict)": a Cloudflare Origin Certificate
+# (SSL/TLS -> Origin Server -> Create certificate) saved as deploy/certs/origin.pem + origin-key.pem.
+(tls_origin) {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+}
+
 {$DOMAIN} {
 	import tls_{$CADDY_TLS:acme}
 	encode gzip
