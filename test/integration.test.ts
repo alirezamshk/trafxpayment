@@ -612,3 +612,27 @@ describe('per-merchant currencies and stats', () => {
     expect(s.slice(0, 6).every((d) => d.paid === 0)).toBe(true);
   });
 });
+
+describe('outbound proxy', () => {
+  it('stores the proxy, masks its password everywhere and keeps it when the masked form is saved back', async () => {
+    const { getProxySetting, setProxySetting } = await import('../src/services/network.js');
+    const app = await buildServer();
+    await createAdmin(pool, 'net@x.io', 'adminpassword1');
+    const cookie = String((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'net@x.io', password: 'adminpassword1', role: 'admin' } })).headers['set-cookie']).split(';')[0]!;
+    const put = (url: string | null) => app.inject({ method: 'PUT', url: '/api/admin/network', headers: { cookie }, payload: { url } });
+
+    expect((await put('ftp://1.2.3.4:21')).json().error.code).toBe('invalid_proxy');
+    expect((await put('socks5://user:s3cret@10.0.0.5:1080')).json()).toEqual({ url: 'socks5://user:***@10.0.0.5:1080', source: 'panel' });
+    expect((await put('socks5://user:***@10.0.0.5:1080')).statusCode).toBe(200);
+    expect((await getProxySetting(pool)).url).toBe('socks5://user:s3cret@10.0.0.5:1080');
+    const { rows } = await pool.query<{ details: string }>(`SELECT details::text FROM audit_log WHERE action LIKE 'admin PUT%'`);
+    expect(rows.length).toBe(2);
+    expect(rows.map((r) => r.details).join()).not.toContain('s3cret');
+
+    expect((await put(null)).json()).toEqual({ url: null, source: 'panel' });
+    await setProxySetting(pool, null);
+    await app.close();
+    const { applyOutboundProxy } = await import('../src/lib/proxy.js');
+    applyOutboundProxy(null, () => {}); // the PUT applied it to this process
+  });
+});

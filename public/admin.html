@@ -31,6 +31,7 @@ async function start() {
       { id: 'unmatched', label: t('a.nav.unmatched'), icon: 'alert' },
       { section: t('a.nav.system') },
       { id: 'assets', label: t('a.nav.assets'), icon: 'coins' },
+      { id: 'network', label: t('a.nav.network'), icon: 'globe' },
       { id: 'webhooks', label: t('a.nav.webhooks'), icon: 'bolt' },
       { id: 'audit', label: t('a.nav.audit'), icon: 'list' },
       { id: 'account', label: t('a.nav.account'), icon: 'shield' },
@@ -177,6 +178,53 @@ const VIEWS = {
       await api('PUT', '/api/admin/asset-settings', body);
       toast(t('a.as.saved', { a: b.dataset.save }));
     })));
+  },
+
+  async network(el, ctx) {
+    ctx.setHeader(t('a.nav.network'), esc(t('a.net.sub')));
+    const cur = await api('GET', '/api/admin/network');
+    el.innerHTML = `
+      ${panel({ title: t('a.net.title'), desc: esc(t('a.net.desc')), actions: `<span class="badge ${cur.source === 'none' ? 'b-muted' : 'b-info'}">${esc(t('a.net.src.' + cur.source))}</span>`, body: `
+        <form id="net-form" class="stack">
+          ${field(esc(t('a.net.url')), `<input id="net-url" class="ltr mono" autocomplete="off" spellcheck="false" placeholder="socks5://user:pass@1.2.3.4:1080" value="${esc(cur.url || '')}">`, esc(t('a.net.help')))}
+          <div class="row">
+            <button type="button" class="btn secondary" id="net-test">${icon('refresh')}${esc(t('a.net.test'))}</button>
+            <button type="submit" class="btn" id="net-save">${esc(t('a.net.save'))}</button>
+          </div>
+        </form>` })}
+      ${panel({ title: t('a.net.current'), id: 'net-res-panel', flush: true, body: '<div id="net-res"></div>' })}`;
+    const urlInput = $('#net-url', el);
+    const render = (r) => {
+      const failed = r.data.filter((x) => !x.ok).length;
+      $('#net-res', el).innerHTML = `<div style="padding:12px 16px 0">${alertBox(failed ? 'warn' : 'ok', `${esc(failed ? t('a.net.someFail', { n: failed }) : t('a.net.allOk'))} · <span class="ltr" dir="ltr">${esc(r.proxy ? t('a.net.via', { p: r.proxy }) : t('a.net.viaDirect'))}</span>`)}</div>
+        ${table([t('a.net.svc'), t('a.net.result'), t('a.net.time')], r.data.map((x) => [
+          `<div>${esc(x.name)}</div><div class="sub mono small ltr">${esc(x.host)}</div>`,
+          x.ok ? `<span class="badge b-ok">${esc(t('a.net.ok'))}</span> <span class="small text-2">HTTP ${esc(x.status)}</span>`
+               : `<span class="badge b-err">${esc(t('a.net.fail'))}</span><div class="sub small" style="color:var(--err);white-space:normal"><bdi>${esc(x.error || '')}</bdi></div>`,
+          `<span class="num">${(x.ms / 1000).toFixed(1)}s</span>`,
+        ]), { end: [2] })}`;
+      return failed;
+    };
+    // Returns the number of unreachable services, or null when the test could not run (e.g. invalid URL).
+    const runTest = async (body) => {
+      $('#net-res', el).innerHTML = `<div class="empty">${icon('clock')}<div>${esc(t('a.net.testing'))}</div></div>`;
+      try { return render(await api('POST', '/api/admin/network/test', body)); }
+      catch (err) { $('#net-res', el).innerHTML = `<div style="padding:16px">${alertBox('err', esc(errText(err)))}</div>`; return null; }
+    };
+    $('#net-test', el).addEventListener('click', (e) => busy(e.currentTarget, () => runTest({ url: urlInput.value.trim() || null })));
+    $('#net-form', el).addEventListener('submit', (e) => {
+      e.preventDefault();
+      busy($('#net-save', el), async () => {
+        const url = urlInput.value.trim() || null;
+        const failed = await runTest({ url });
+        if (failed === null) return;
+        if (failed && !(await confirmDialog(t('a.net.save'), esc(t('a.net.saveFailing', { n: failed }))))) return;
+        await api('PUT', '/api/admin/network', { url });
+        toast(t('a.net.saved'));
+        VIEWS.network(el, ctx);
+      });
+    });
+    runTest({});
   },
 
   async webhooks(el, ctx) {

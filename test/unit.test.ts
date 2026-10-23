@@ -199,3 +199,66 @@ describe('toncenter client', () => {
     for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(1050);
   }, 15000);
 });
+
+describe('outbound proxy dispatchers', () => {
+  // Minimal HTTP CONNECT and SOCKS5 (no auth) proxies that record where they tunnel to.
+  async function proxies() {
+    const net = await import('node:net');
+    const seen: string[] = [];
+    const tunnel = (sock: import('node:net').Socket, host: string, port: number, reply: Buffer, forward?: Buffer) => {
+      seen.push(`${host}:${port}`);
+      const up = net.connect(port, host, () => { if (forward) up.write(forward); else sock.write(reply); up.pipe(sock).pipe(up); });
+      up.on('error', () => sock.destroy());
+    };
+    const http = net.createServer((sock) => sock.once('data', (d: Buffer) => {
+      const connect = /^CONNECT ([^:]+):(\d+)/.exec(d.toString());
+      if (connect) return tunnel(sock, connect[1]!, Number(connect[2]), Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'));
+      const u = new URL(/^[A-Z]+ (\S+)/.exec(d.toString())![1]!); // plain-HTTP proxying: absolute URL in the request line
+      tunnel(sock, u.hostname, Number(u.port), Buffer.alloc(0), d);
+    }));
+    const socks = net.createServer((sock) => {
+      sock.once('data', () => {
+        sock.write(Buffer.from([5, 0]));
+        sock.once('data', (req: Buffer) => {
+          const len = req[4]!;
+          const host = req[3] === 3 ? req.subarray(5, 5 + len).toString() : [...req.subarray(4, 8)].join('.');
+          const port = req.readUInt16BE(req[3] === 3 ? 5 + len : 8);
+          tunnel(sock, host, port, Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));
+        });
+      });
+    });
+    const target = (await import('node:http')).createServer((_q, r) => r.end('pong'));
+    const listen = (s: import('node:net').Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as { port: number }).port)));
+    const [hp, sp, tp] = [await listen(http), await listen(socks), await listen(target)];
+    return { seen, hp, sp, tp, close: () => [http, socks, target].forEach((s) => s.close()) };
+  }
+
+  it('sends fetch and node:http through HTTP and SOCKS5 proxies, and back to direct', async () => {
+    const { applyOutboundProxy, proxyDispatcher, parseProxyUrl, maskProxyUrl } = await import('../src/lib/proxy.js');
+    const { fetch: uFetch } = await import('undici');
+    const nodeHttp = await import('node:http');
+    const p = await proxies();
+    const target = `http://127.0.0.1:${p.tp}/`;
+    const viaNodeHttp = () => new Promise<string>((resolve, reject) => nodeHttp.get(target, (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => resolve(b)); }).on('error', reject));
+    try {
+      for (const proxy of [`http://127.0.0.1:${p.hp}`, `socks5://127.0.0.1:${p.sp}`]) {
+        p.seen.length = 0;
+        expect(await (await uFetch(target, { dispatcher: proxyDispatcher(proxy) })).text()).toBe('pong');
+        applyOutboundProxy(proxy, () => {});
+        expect(await (await fetch(target)).text()).toBe('pong');
+        expect(await viaNodeHttp()).toBe('pong');
+        expect(p.seen.length).toBe(3);
+      }
+      applyOutboundProxy(null, () => {});
+      p.seen.length = 0;
+      expect(await (await fetch(target)).text()).toBe('pong');
+      expect(p.seen).toEqual([]);
+    } finally {
+      applyOutboundProxy(null, () => {});
+      p.close();
+    }
+    expect(() => parseProxyUrl('ftp://x:1')).toThrow(/Unsupported/);
+    expect(() => parseProxyUrl('socks5://1.2.3.4')).toThrow(/port/);
+    expect(maskProxyUrl('http://u:p@h:1')).toBe('http://u:***@h:1');
+  });
+});

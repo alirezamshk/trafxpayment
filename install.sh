@@ -76,8 +76,8 @@ check_outbound() {
   local url
   url="$(get_env TRON_API_URL)"; url="${url:-https://api.trongrid.io}"
   docker compose run --rm --no-deps -T api node --input-type=module -e "
-    import { installOutboundProxy } from './dist/lib/proxy.js';
-    installOutboundProxy(process.env.OUTBOUND_PROXY, () => {});
+    import { applyOutboundProxy } from './dist/lib/proxy.js';
+    applyOutboundProxy(process.env.OUTBOUND_PROXY || null, () => {});
     try { const r = await fetch('$url/wallet/getnowblock', { method: 'POST', signal: AbortSignal.timeout(15000) }); console.log('HTTP ' + r.status); }
     catch (e) { console.log('FAILED: ' + (e.cause?.message ?? e.message)); process.exit(1); }" 2>&1 | grep -E '^(HTTP|FAILED)' | tail -n1
 }
@@ -97,11 +97,12 @@ if [ -f .env ]; then
 fi
 
 # ---------------------------------------------------------------- proxy (asked first: installing needs the internet)
-say "Internet access"
-echo "If this server cannot reach international sites directly (e.g. in Iran), give an HTTP proxy."
+say "Internet access for the installation"
+echo "Only needed if this server cannot download from GitHub / Docker Hub / npm directly."
+echo "(The proxy for blockchain APIs, prices and Telegram is set later in the admin panel: Proxy & connectivity.)"
 echo "Examples: http://127.0.0.1:10809 (proxy app on this server), http://user:pass@1.2.3.4:3128"
 echo "SOCKS-only proxies are not supported — enable the HTTP inbound of your proxy app."
-ask PROXY "HTTP proxy URL (empty = direct connection)" ""
+ask PROXY "HTTP proxy URL for installing (empty = none)" ""
 if [ -n "$PROXY" ]; then
   [[ "$PROXY" =~ ^https?:// ]] || die "Proxy must start with http:// or https://"
   if curl -sS -o /dev/null --max-time 20 -x "$PROXY" https://api.trongrid.io; then

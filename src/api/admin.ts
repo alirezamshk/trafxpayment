@@ -6,6 +6,8 @@ import { fromBaseUnits, toBaseUnits } from '../lib/amount.js';
 import { invoices, ledger } from '../services/index.js';
 import { createApiKey, createMerchant, getMerchant, listMerchants } from '../services/merchants.js';
 import { audit, auditList } from '../services/audit.js';
+import { getProxySetting, setProxySetting, testConnectivity } from '../services/network.js';
+import { applyOutboundProxy, maskProxyUrl, parseProxyUrl } from '../lib/proxy.js';
 import { requireAdminSession } from './auth.js';
 import { otpFromRequest, requireOtp, resetTwoFactor, twoFactorRoutes } from './twofactor.js';
 import { balancesView, listInvoices, listQuery, payoutsView } from './merchant-api.js';
@@ -23,7 +25,8 @@ export async function adminRoutes(app: FastifyInstance) {
   await app.register(twoFactorRoutes('admin', (req) => req.adminId!));
 
   // With 2FA enabled every admin change needs a fresh code, and every successful change is audited.
-  const isMutation = (method: string, url: string) => method !== 'GET' && !url.includes('/2fa');
+  // (A connectivity test changes nothing, so it needs no code and is not audited.)
+  const isMutation = (method: string, url: string) => method !== 'GET' && !url.includes('/2fa') && !url.startsWith('/api/admin/network/test');
   app.addHook('preHandler', async (req) => {
     if (req.adminId && isMutation(req.method, req.url)) await requireOtp('admin', req.adminId, otpFromRequest(req));
   });
@@ -31,6 +34,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.addHook('onSend', async (req, reply, payload) => {
     if (!req.adminId || !isMutation(req.method, req.url) || reply.statusCode >= 400) return payload;
     const { password: _p, ...body } = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.url === 'string') body.url = maskProxyUrl(body.url); // proxy credentials stay out of the log
     const params = req.params as Record<string, string>;
     await audit(pool, {
       actorType: 'admin',
@@ -107,6 +111,41 @@ export async function adminRoutes(app: FastifyInstance) {
       hotMax: u(b.hot_max),
     });
     return { ok: true };
+  });
+
+  // --- outbound proxy (blockchain APIs, prices, Telegram, webhooks)
+  const proxyView = async () => {
+    const p = await getProxySetting(pool);
+    return { url: maskProxyUrl(p.url), source: p.source };
+  };
+  const proxyUrlInput = z.object({ url: z.string().trim().max(500).nullable().optional() });
+  const checkedProxy = (url: string | null | undefined) => {
+    if (!url) return null;
+    try {
+      return parseProxyUrl(url).toString();
+    } catch (e) {
+      throw httpError(400, 'invalid_proxy', (e as Error).message);
+    }
+  };
+  app.get('/network', proxyView);
+  app.put('/network', async (req) => {
+    const { url } = parse(proxyUrlInput, req.body);
+    if (url && !url.includes('***')) checkedProxy(url);
+    let saved: string | null;
+    try {
+      saved = await setProxySetting(pool, url || null);
+    } catch (e) {
+      throw httpError(400, 'invalid_proxy', (e as Error).message);
+    }
+    applyOutboundProxy(saved, (m) => req.log.info(m)); // worker and signer pick it up within 30 s
+    return proxyView();
+  });
+  // Tests the given proxy (or the saved one when `url` is omitted, or direct when it is null/empty).
+  app.post('/network/test', async (req) => {
+    const { url } = parse(proxyUrlInput, req.body);
+    const stored = (await getProxySetting(pool)).url;
+    const target = url === undefined || (url && maskProxyUrl(stored) === url.replace(/\/$/, '')) ? stored : checkedProxy(url);
+    return { proxy: maskProxyUrl(target), data: await testConnectivity(target) };
   });
 
   // --- merchants
