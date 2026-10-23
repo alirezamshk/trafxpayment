@@ -1,12 +1,15 @@
-FROM node:22-alpine AS build
+# DOCKERHUB / NPM_REGISTRY let servers that cannot reach Docker Hub or npm use a mirror (set by install.sh).
+ARG DOCKERHUB=docker.io
+FROM ${DOCKERHUB}/library/node:22-alpine AS build
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --registry="$NPM_REGISTRY" --no-audit --no-fund
 COPY tsconfig*.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-alpine
+FROM ${DOCKERHUB}/library/node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules

@@ -7,6 +7,7 @@
 #   CADDY_TARGET=cloudflare     caddy with the Cloudflare DNS plugin (certificates without ports 80/443)
 #   API_BIND / API_PORT         where the API is published on the host (default 127.0.0.1:3000)
 #   BUILD_PROXY                 proxy for image builds (npm, Go modules), as seen from the host
+#   DOCKERHUB / NPM_REGISTRY / GOPROXY   mirrors for servers that cannot reach Docker Hub, npm or Go
 #   OUTBOUND_PROXY              proxy for the running services, as seen from inside containers
 
 x-app: &app
@@ -16,13 +17,15 @@ x-app: &app
     args:
       HTTP_PROXY: ${BUILD_PROXY:-}
       HTTPS_PROXY: ${BUILD_PROXY:-}
+      DOCKERHUB: ${DOCKERHUB:-docker.io}
+      NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
   image: trafxpayment-app
   env_file: .env
   extra_hosts: ["host.docker.internal:host-gateway"]
 
 services:
   db:
-    image: postgres:16-alpine
+    image: ${DOCKERHUB:-docker.io}/library/postgres:16-alpine
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: trafxpayment
@@ -53,6 +56,8 @@ services:
       args:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
+        DOCKERHUB: ${DOCKERHUB:-docker.io}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     image: trafxpayment-caddy-${CADDY_TARGET:-plain}
     profiles: [caddy]
     env_file: .env # DOMAIN, ACME_EMAIL, CF_API_TOKEN

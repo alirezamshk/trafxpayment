@@ -2,6 +2,7 @@
 # One-shot installer for a single Ubuntu server (22.04 / 24.04).
 # Usage (as root, from the project directory):  sudo bash install.sh
 # Re-running it on an installed server only rebuilds and restarts; keys and .env are never overwritten.
+# If a run stopped before the wallet keys were created (e.g. a download failed), re-running resumes it.
 #
 # Works next to other services: the web port can be 80/443, any other port (certificate via
 # Cloudflare DNS), or behind a reverse proxy that already runs on this server. An HTTP proxy can be
@@ -82,8 +83,59 @@ check_outbound() {
     catch (e) { console.log('FAILED: ' + (e.cause?.message ?? e.message)); process.exit(1); }" 2>&1 | grep -E '^(HTTP|FAILED)' | tail -n1
 }
 
+# Docker Hub, npm and Go modules are blocked or very slow from some countries (e.g. Iran).
+# Pick a reachable source for each and store it in .env; image names and build args follow it.
+DOCKER_MIRRORS="docker.io docker.arvancloud.ir focker.ir docker.iranserver.com registry.docker.ir hub.hamdocker.ir docker.mobinhost.com"
+NPM_MIRRORS="https://registry.npmjs.org/ https://registry.npmmirror.com/"
+GO_PROXIES="https://proxy.golang.org https://goproxy.io https://goproxy.cn"
+
+reachable() { curl -sf -o /dev/null --connect-timeout 8 --max-time 20 "$@"; }
+
+ensure_build_sources() {
+  local current m image="node:22-alpine"
+  say "Checking where to download Docker images, npm packages and Go modules from"
+  current="$(get_env DOCKERHUB)"
+  for m in ${current:+$current} $DOCKER_MIRRORS; do
+    printf '  Docker images via %-26s ' "$m"
+    if timeout 180 docker pull -q "$m/library/$image" >/dev/null 2>&1; then
+      echo "OK"; set_env DOCKERHUB "$m" .env; break
+    fi
+    echo "unreachable"; m=""
+  done
+  if [ -z "$m" ]; then
+    warn "No Docker registry worked. Enter another Docker Hub mirror (e.g. myregistry.ir), or leave empty to stop."
+    ask m "Docker Hub mirror" ""
+    [ -n "$m" ] && timeout 300 docker pull -q "$m/library/$image" >/dev/null 2>&1 || die "Cannot download Docker images. Fix network access to Docker Hub or a mirror, then re-run: sudo bash install.sh"
+    set_env DOCKERHUB "$m" .env
+  fi
+
+  current="$(get_env NPM_REGISTRY)"
+  for m in ${current:+$current} $NPM_MIRRORS ""; do
+    [ -z "$m" ] && break
+    if reachable ${BUILD_PROXY_ARG:-} "${m%/}/-/ping"; then echo "  npm packages via $m"; set_env NPM_REGISTRY "$m" .env; break; fi
+  done
+  if [ -z "$m" ]; then
+    warn "npm registry unreachable. Enter an npm mirror URL (or re-run with an installation proxy)."
+    ask m "npm registry mirror" ""
+    [ -n "$m" ] || die "Cannot download npm packages."
+    set_env NPM_REGISTRY "$m" .env
+  fi
+
+  if [ "$(get_env CADDY_TARGET)" = cloudflare ]; then
+    for m in $GO_PROXIES ""; do
+      [ -z "$m" ] && break
+      if reachable ${BUILD_PROXY_ARG:-} "$m/github.com/caddyserver/caddy/v2/@v/list"; then echo "  Go modules via $m"; set_env GOPROXY "$m,direct" .env; break; fi
+    done
+    [ -n "$m" ] || warn "No Go module proxy is reachable; building Caddy with the Cloudflare plugin will probably fail."
+  fi
+}
+
 # ---------------------------------------------------------------- already installed? just update
-if [ -f .env ]; then
+# A previous run that stopped before the keys were generated is resumed instead.
+if [ -f .env ] && [ -z "$(get_env EVM_XPUB)" ]; then
+  say "Resuming an unfinished installation (settings from .env are kept)"
+  RESUME=1
+elif [ -f .env ]; then
   say "Existing installation found (.env present) — rebuilding and restarting only (keys are kept)"
   grep -q '^COMPOSE_PROFILES=' .env || set_env COMPOSE_PROFILES caddy .env   # installs from before ports were configurable
   docker compose up -d --build --remove-orphans
@@ -96,6 +148,7 @@ if [ -f .env ]; then
   exit 0
 fi
 
+if [ -z "${RESUME:-}" ]; then
 # ---------------------------------------------------------------- proxy (asked first: installing needs the internet)
 say "Internet access for the installation"
 echo "Only needed if this server cannot download from GitHub / Docker Hub / npm directly."
@@ -137,10 +190,8 @@ if [ -n "$PROXY" ] && ! grep -qs HTTPS_PROXY /etc/systemd/system/docker.service.
       warn "Configuring Docker to use the proxy restarts Docker: your running containers stop briefly"
       warn "(containers with a restart policy start again; others must be started by hand)."
     fi
-    if yes_no "Configure Docker to download images through $PROXY?" y; then
+    if yes_no "Configure Docker to download images through $PROXY? (no = try Docker Hub mirrors instead)" n; then
       docker_daemon_proxy "$PROXY"
-    else
-      die "Docker needs to download images. Configure a registry mirror in /etc/docker/daemon.json, then re-run."
     fi
   fi
 fi
@@ -294,6 +345,22 @@ if [ "$NET_MODE" = 2 ]; then
 else
   set_env NETWORK_MODE mainnet .env
 fi
+
+else
+  DOMAIN="$(get_env DOMAIN)"; ACME_EMAIL="$(get_env ACME_EMAIL)"; PUBLIC_URL="$(get_env PUBLIC_BASE_URL)"
+  API_BIND="$(get_env API_BIND)"; API_PORT="$(get_env API_PORT)"; HTTPS_PORT="$(get_env HTTPS_PORT)"
+  PROXY="$(get_env BUILD_PROXY)"
+  if [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3; elif [ "$(get_env CADDY_TARGET)" = cloudflare ]; then WEB_MODE=2; else WEB_MODE=1; fi
+  ask ADMIN_EMAIL "Admin panel login email" "${ACME_EMAIL:-admin@$DOMAIN}"
+  while :; do
+    read -r -s -p "Admin panel password (min 10 chars): " ADMIN_PASSWORD; echo
+    [ "${#ADMIN_PASSWORD}" -ge 10 ] && break
+    warn "Too short"
+  done
+fi
+
+BUILD_PROXY_ARG=""; [ -n "${PROXY:-}" ] && BUILD_PROXY_ARG="-x $PROXY"
+ensure_build_sources
 
 # ---------------------------------------------------------------- build + keys
 say "Building the application images (takes a few minutes)"
