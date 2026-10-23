@@ -573,13 +573,14 @@ describe('security controls', () => {
     await createAdmin(pool, 'ops@x.io', 'adminpassword1');
     const cookie = String((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'ops@x.io', password: 'adminpassword1', role: 'admin' } })).headers['set-cookie']).split(';')[0]!;
     const setup = (await app.inject({ method: 'POST', url: '/api/admin/2fa/setup', headers: { cookie }, payload: {} })).json();
+    // Codes for `step` and `step + 1` stay valid (±1 window) even if a 30 s boundary passes mid-test.
     const step = currentStep();
-    await app.inject({ method: 'POST', url: '/api/admin/2fa/enable', headers: { cookie }, payload: { code: totpAt(setup.secret, step - 1) } });
+    await app.inject({ method: 'POST', url: '/api/admin/2fa/enable', headers: { cookie }, payload: { code: totpAt(setup.secret, step) } });
 
     const patch = (otp?: string) =>
       app.inject({ method: 'PATCH', url: `/api/admin/merchants/${m.id}`, headers: { cookie, ...(otp ? { 'x-otp': otp } : {}) }, payload: { fee_percent: 2 } });
     expect((await patch()).json().error.code).toBe('otp_required');
-    expect((await patch(totpAt(setup.secret, step))).statusCode).toBe(200);
+    expect((await patch(totpAt(setup.secret, step + 1))).statusCode).toBe(200);
     const { rows } = await pool.query<{ action: string }>(`SELECT action FROM audit_log WHERE actor_type = 'admin' ORDER BY id`);
     expect(rows.map((r) => r.action)).toContain('admin PATCH /api/admin/merchants/:id');
     await app.close();

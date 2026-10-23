@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { installOutboundProxy } from '../lib/proxy.js';
 import { registry } from '../context.js';
 import { invoices, ledger } from '../services/index.js';
 import { EvmWatcher, ethersRpc } from '../watchers/evm.js';
@@ -7,6 +8,8 @@ import { TronWatcher, tronGridApi } from '../watchers/tron.js';
 import { consoleLogger as log, type Watcher } from '../watchers/types.js';
 import { ExpiryWorker, runLoops, SettlementWorker } from '../workers/periodic.js';
 import { WebhookDispatcher } from '../workers/webhook-dispatcher.js';
+
+installOutboundProxy(config.OUTBOUND_PROXY, (m) => log.info({}, m));
 
 const jobs: Watcher[] = [new WebhookDispatcher(log), new ExpiryWorker(invoices, log), new SettlementWorker(ledger, log)];
 

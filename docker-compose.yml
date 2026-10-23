@@ -1,5 +1,25 @@
 # The signer is the only process that holds the mnemonic. For production, run it on a
 # separate locked-down host (same image, `node dist/bin/signer.js`) with its own .env.signer.
+#
+# Everything below is driven by .env (written by install.sh):
+#   COMPOSE_PROFILES=caddy      run the bundled HTTPS proxy (empty = an existing proxy forwards to the API)
+#   HTTP_PORT / HTTPS_PORT      host ports for caddy (default 80/443)
+#   CADDY_TARGET=cloudflare     caddy with the Cloudflare DNS plugin (certificates without ports 80/443)
+#   API_BIND / API_PORT         where the API is published on the host (default 127.0.0.1:3000)
+#   BUILD_PROXY                 proxy for image builds (npm, Go modules), as seen from the host
+#   OUTBOUND_PROXY              proxy for the running services, as seen from inside containers
+
+x-app: &app
+  build:
+    context: .
+    network: host
+    args:
+      HTTP_PROXY: ${BUILD_PROXY:-}
+      HTTPS_PROXY: ${BUILD_PROXY:-}
+  image: trafxpayment-app
+  env_file: .env
+  extra_hosts: ["host.docker.internal:host-gateway"]
+
 services:
   db:
     image: postgres:16-alpine
@@ -11,24 +31,37 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       retries: 10
+    restart: unless-stopped
 
   migrate:
-    build: .
-    env_file: .env
+    <<: *app
     command: ["node", "dist/bin/migrate.js"]
     depends_on: { db: { condition: service_healthy } }
 
   api:
-    build: .
-    env_file: .env
-    ports: ["127.0.0.1:3000:3000"] # public traffic goes through caddy (HTTPS)
+    <<: *app
+    ports: ["${API_BIND:-127.0.0.1}:${API_PORT:-3000}:3000"]
     restart: unless-stopped
     depends_on: { migrate: { condition: service_completed_successfully } }
 
   caddy:
-    image: caddy:2-alpine
-    env_file: .env # DOMAIN, ACME_EMAIL
-    ports: ["80:80", "443:443"]
+    build:
+      context: ./deploy
+      dockerfile: caddy.Dockerfile
+      target: ${CADDY_TARGET:-plain}
+      network: host
+      args:
+        HTTP_PROXY: ${BUILD_PROXY:-}
+        HTTPS_PROXY: ${BUILD_PROXY:-}
+    image: trafxpayment-caddy-${CADDY_TARGET:-plain}
+    profiles: [caddy]
+    env_file: .env # DOMAIN, ACME_EMAIL, CF_API_TOKEN
+    environment:
+      HTTP_PROXY: ${OUTBOUND_PROXY:-}
+      HTTPS_PROXY: ${OUTBOUND_PROXY:-}
+      NO_PROXY: api,localhost,127.0.0.1
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["${HTTP_PORT:-80}:80", "${HTTPS_PORT:-443}:443"]
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -37,14 +70,13 @@ services:
     depends_on: [api]
 
   worker:
-    build: .
-    env_file: .env
+    <<: *app
     command: ["node", "dist/bin/worker.js"]
     restart: unless-stopped
     depends_on: { migrate: { condition: service_completed_successfully } }
 
   signer:
-    build: .
+    <<: *app
     env_file: [.env, .env.signer]
     command: ["node", "dist/bin/signer.js"]
     restart: unless-stopped

@@ -20,6 +20,10 @@ const schema = z.object({
   PORT: z.coerce.number().default(3000),
   HOST: z.string().default('0.0.0.0'),
   PUBLIC_BASE_URL: z.string().default('http://localhost:3000'),
+  // Reverse proxies in front of the API (Caddy = 1). Used to read the real client IP from X-Forwarded-For.
+  TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(1),
+  // http(s)://host:port — all outbound calls (blockchain APIs, prices, webhooks) go through it.
+  OUTBOUND_PROXY: optionalString,
   ADMIN_TOKEN: optionalString,
 
   INVOICE_TTL_MINUTES: z.coerce.number().int().positive().default(30),

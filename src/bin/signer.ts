@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { installOutboundProxy } from '../lib/proxy.js';
 import { registry } from '../context.js';
 import { ledger } from '../services/index.js';
 import { EvmSigner } from '../sweeper/evm.js';
@@ -9,6 +10,8 @@ import type { ChainSigner } from '../sweeper/types.js';
 import { WatchOnlyWallet, SigningWallet } from '../wallet/hd.js';
 import { consoleLogger as log } from '../watchers/types.js';
 import { runLoops } from '../workers/periodic.js';
+
+installOutboundProxy(config.OUTBOUND_PROXY, (m) => log.info({}, m));
 
 if (!config.SIGNER_MNEMONIC) throw new Error('SIGNER_MNEMONIC is required for the signer process');
 const keys = new SigningWallet(config.SIGNER_MNEMONIC);

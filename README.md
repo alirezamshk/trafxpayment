@@ -40,7 +40,7 @@
 
 ## نصب روی سرور (Ubuntu 22.04 / 24.04)
 
-پیش‌نیاز: سرور خارج از ایران و یک دامنه که رکورد A آن به IP سرور اشاره کند.
+پیش‌نیاز: یک دامنه که رکورد A آن به IP سرور اشاره کند. سرور خارج از ایران ساده‌تر است، ولی سرور ایران هم با پراکسی پشتیبانی می‌شود (پایین‌تر).
 
 ```bash
 git clone -b claude/lucid-hamilton-aez7rd https://github.com/alirezamshk/trafxpayment.git /opt/trafxpayment
@@ -52,6 +52,14 @@ sudo bash install.sh
 اجرای دوباره روی سرور نصب‌شده فقط rebuild و restart می‌کند و کلیدها را تغییر نمی‌دهد.
 
 به‌روزرسانی: `cd /opt/trafxpayment && git pull && docker compose up -d --build`
+
+### سرور ایران / پورت‌های اشغال
+نصاب در ابتدا این‌ها را می‌پرسد:
+- **پراکسی HTTP** (مثلاً `http://127.0.0.1:10809`): برای نصب Docker، دانلود image و npm، و در زمان اجرا برای همه ارتباط‌های بیرونی (TronGrid، toncenter، RPCها، CoinGecko، وب‌هوک‌ها). اگر Docker Hub مسدود باشد، Docker هم روی همین پراکسی تنظیم می‌شود. پراکسیِ روی همین سرور باید روی `0.0.0.0` گوش بدهد (نه فقط 127.0.0.1) تا کانتینرها به آن برسند؛ آن پورت را از اینترنت ببندید. SOCKS پشتیبانی نمی‌شود؛ inbound از نوع HTTP را فعال کنید.
+- **نحوه دسترسی وب**: ۱) پورت ۸۰/۴۴۳ معمولی؛ ۲) پورت دلخواه مثل `https://domain:8443` با گواهی از طریق DNS کلودفلر (DNS دامنه روی Cloudflare و یک API Token با دسترسی Edit zone DNS)؛ ۳) پشت reverse proxy موجود روی همان سرور (nginx / Nginx Proxy Manager / Traefik) که دامنه را به `http://172.17.0.1:3080` فوروارد می‌کند.
+- **شبکه**: mainnet یا testnet (TRON Nile، BSC testnet، TON testnet).
+
+همه این‌ها بعداً در `.env` قابل تغییرند (`OUTBOUND_PROXY`، `BUILD_PROXY`، `HTTPS_PORT`، `CADDY_TARGET`، `COMPOSE_PROFILES`، `API_BIND`، `API_PORT`) و بعد `docker compose up -d --build`.
 
 بعد از نصب: کیف‌های داغ را برای کارمزد شبکه شارژ کنید، در `/admin` پذیرنده بسازید، و پذیرنده در `/panel` آدرس تسویه و زمان‌بندی را تنظیم کند.
 

@@ -65,7 +65,7 @@ async function publicView(inv: InvoiceRow) {
 }
 
 export async function buildServer() {
-  const app = Fastify({ logger: { level: config.LOG_LEVEL }, trustProxy: true, bodyLimit: 64 * 1024 });
+  const app = Fastify({ logger: { level: config.LOG_LEVEL }, trustProxy: (_addr: string, hop: number) => hop < config.TRUST_PROXY_HOPS, bodyLimit: 64 * 1024 });
 
   app.setErrorHandler((err: FastifyError | InvoiceError, req, reply) => {
     if (err instanceof InvoiceError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });

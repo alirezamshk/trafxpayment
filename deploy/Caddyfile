@@ -2,7 +2,18 @@
 	email {$ACME_EMAIL}
 }
 
+(tls_plain) {
+}
+
+# Certificate via Cloudflare DNS: works on any port, no need for 80/443.
+(tls_cloudflare) {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+}
+
 {$DOMAIN} {
+	import tls_{$CADDY_TARGET:plain}
 	encode gzip
 	reverse_proxy api:3000
 }

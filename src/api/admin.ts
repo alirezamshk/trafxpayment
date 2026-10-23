@@ -27,8 +27,9 @@ export async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req) => {
     if (req.adminId && isMutation(req.method, req.url)) await requireOtp('admin', req.adminId, otpFromRequest(req));
   });
-  app.addHook('onResponse', async (req, reply) => {
-    if (!req.adminId || !isMutation(req.method, req.url) || reply.statusCode >= 400) return;
+  // onSend (not onResponse) so the audit row exists before the admin sees the change succeed.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (!req.adminId || !isMutation(req.method, req.url) || reply.statusCode >= 400) return payload;
     const { password: _p, ...body } = (req.body ?? {}) as Record<string, unknown>;
     const params = req.params as Record<string, string>;
     await audit(pool, {
@@ -39,6 +40,7 @@ export async function adminRoutes(app: FastifyInstance) {
       details: { params, body },
       ip: req.ip,
     }).catch((err) => req.log.error(err));
+    return payload;
   });
 
   app.get('/stats', async (req) => ({ data: await dailyStats(null, parse(statsQuery, req.query).days) }));
