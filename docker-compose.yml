@@ -4,10 +4,10 @@
 # Everything below is driven by .env (written by install.sh):
 #   COMPOSE_PROFILES=caddy      run the bundled HTTPS proxy (empty = an existing proxy forwards to the API)
 #   HTTP_PORT / HTTPS_PORT      host ports for caddy (default 80/443)
-#   CADDY_TARGET=cloudflare     caddy with the Cloudflare DNS plugin (certificates without ports 80/443)
+#   CADDY_TLS=internal          behind Cloudflare: self-signed origin cert, any Cloudflare port (default acme)
 #   API_BIND / API_PORT         where the API is published on the host (default 127.0.0.1:3000)
-#   BUILD_PROXY                 proxy for image builds (npm, Go modules), as seen from the host
-#   DOCKERHUB / NPM_REGISTRY / GOPROXY   mirrors for servers that cannot reach Docker Hub, npm or Go
+#   BUILD_PROXY                 proxy for image builds (npm), as seen from the host
+#   DOCKERHUB / NPM_REGISTRY    mirrors for servers that cannot reach Docker Hub or npm
 #   OUTBOUND_PROXY              proxy for the running services, as seen from inside containers
 
 x-app: &app
@@ -48,19 +48,9 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully } }
 
   caddy:
-    build:
-      context: ./deploy
-      dockerfile: caddy.Dockerfile
-      target: ${CADDY_TARGET:-plain}
-      network: host
-      args:
-        HTTP_PROXY: ${BUILD_PROXY:-}
-        HTTPS_PROXY: ${BUILD_PROXY:-}
-        DOCKERHUB: ${DOCKERHUB:-docker.io}
-        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
-    image: trafxpayment-caddy-${CADDY_TARGET:-plain}
+    image: ${DOCKERHUB:-docker.io}/library/caddy:2-alpine
     profiles: [caddy]
-    env_file: .env # DOMAIN, ACME_EMAIL, CF_API_TOKEN
+    env_file: .env # DOMAIN, ACME_EMAIL, CADDY_TLS, TRUSTED_PROXIES
     environment:
       HTTP_PROXY: ${OUTBOUND_PROXY:-}
       HTTPS_PROXY: ${OUTBOUND_PROXY:-}

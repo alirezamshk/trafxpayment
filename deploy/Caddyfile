@@ -1,19 +1,25 @@
 {
 	email {$ACME_EMAIL}
-}
-
-(tls_plain) {
-}
-
-# Certificate via Cloudflare DNS: works on any port, no need for 80/443.
-(tls_cloudflare) {
-	tls {
-		dns cloudflare {env.CF_API_TOKEN}
+	skip_install_trust
+	servers {
+		# Only these may set X-Forwarded-For (Cloudflare ranges when the site sits behind Cloudflare).
+		trusted_proxies static {$TRUSTED_PROXIES:127.0.0.1/32}
+		trusted_proxies_strict
 	}
 }
 
+# Let's Encrypt via ports 80/443.
+(tls_acme) {
+}
+
+# Behind Cloudflare (orange cloud, SSL mode "Full"): Cloudflare serves the public certificate,
+# this self-signed one only encrypts Cloudflare -> server. Works on any Cloudflare-supported port.
+(tls_internal) {
+	tls internal
+}
+
 {$DOMAIN} {
-	import tls_{$CADDY_TARGET:plain}
+	import tls_{$CADDY_TLS:acme}
 	encode gzip
 	reverse_proxy api:3000
 }

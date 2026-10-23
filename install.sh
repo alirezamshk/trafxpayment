@@ -4,8 +4,8 @@
 # Re-running it on an installed server only rebuilds and restarts; keys and .env are never overwritten.
 # If a run stopped before the wallet keys were created (e.g. a download failed), re-running resumes it.
 #
-# Works next to other services: the web port can be 80/443, any other port (certificate via
-# Cloudflare DNS), or behind a reverse proxy that already runs on this server. An HTTP proxy can be
+# Works next to other services: the web port can be 80/443, another port behind the Cloudflare
+# proxy, or behind a reverse proxy that already runs on this server. An HTTP proxy can be
 # used for everything that needs the internet (Docker images, npm, blockchain APIs) — e.g. in Iran.
 set -euo pipefail
 
@@ -83,17 +83,18 @@ check_outbound() {
     catch (e) { console.log('FAILED: ' + (e.cause?.message ?? e.message)); process.exit(1); }" 2>&1 | grep -E '^(HTTP|FAILED)' | tail -n1
 }
 
-# Docker Hub, npm and Go modules are blocked or very slow from some countries (e.g. Iran).
+# Docker Hub and npm are blocked or very slow from some countries (e.g. Iran).
 # Pick a reachable source for each and store it in .env; image names and build args follow it.
 DOCKER_MIRRORS="docker.io docker.arvancloud.ir focker.ir docker.iranserver.com registry.docker.ir hub.hamdocker.ir docker.mobinhost.com"
 NPM_MIRRORS="https://registry.npmjs.org/ https://registry.npmmirror.com/"
-GO_PROXIES="https://proxy.golang.org https://goproxy.io https://goproxy.cn"
+# Cloudflare edge ranges (cloudflare.com/ips): the only peers allowed to set X-Forwarded-For in mode 2.
+CLOUDFLARE_IPS="173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32"
 
 reachable() { curl -sf -o /dev/null --connect-timeout 8 --max-time 20 "$@"; }
 
 ensure_build_sources() {
   local current m image="node:22-alpine"
-  say "Checking where to download Docker images, npm packages and Go modules from"
+  say "Checking where to download Docker images and npm packages from"
   current="$(get_env DOCKERHUB)"
   for m in ${current:+$current} $DOCKER_MIRRORS; do
     printf '  Docker images via %-26s ' "$m"
@@ -121,13 +122,6 @@ ensure_build_sources() {
     set_env NPM_REGISTRY "$m" .env
   fi
 
-  if [ "$(get_env CADDY_TARGET)" = cloudflare ]; then
-    for m in $GO_PROXIES ""; do
-      [ -z "$m" ] && break
-      if reachable ${BUILD_PROXY_ARG:-} "$m/github.com/caddyserver/caddy/v2/@v/list"; then echo "  Go modules via $m"; set_env GOPROXY "$m,direct" .env; break; fi
-    done
-    [ -n "$m" ] || warn "No Go module proxy is reachable; building Caddy with the Cloudflare plugin will probably fail."
-  fi
 }
 
 # ---------------------------------------------------------------- already installed? just update
@@ -205,8 +199,8 @@ ask DOMAIN "Domain for the gateway (DNS A record must point to this server), e.g
 echo
 echo "How should visitors reach the gateway?"
 echo "  1) HTTPS on ports 80 + 443 (standard, the ports must be free)"
-echo "  2) HTTPS on another port, e.g. https://$DOMAIN:8443 (certificate via Cloudflare DNS;"
-echo "     the domain's DNS must be on Cloudflare — use when 80/443 are taken by something else)"
+echo "  2) HTTPS on another port behind the Cloudflare proxy, e.g. https://$DOMAIN:8443"
+echo "     (DNS record proxied / orange cloud, SSL mode \"Full\" — use when 80/443 are taken)"
 echo "  3) Behind a reverse proxy that already runs on this server (nginx, Caddy, Traefik,"
 echo "     Nginx Proxy Manager...) — it keeps 80/443 and forwards $DOMAIN to the gateway"
 WEB_DEFAULT=1
@@ -218,7 +212,7 @@ if port_busy 80 || port_busy 443; then
 fi
 ask WEB_MODE "Choose 1, 2 or 3" "$WEB_DEFAULT"
 
-HTTP_PORT=80; HTTPS_PORT=443; CADDY_TARGET=plain; CF_API_TOKEN=""; PROFILES=caddy
+HTTP_PORT=80; HTTPS_PORT=443; CADDY_TLS=acme; TRUSTED_PROXIES=""; HOPS=1; PROFILES=caddy
 API_BIND=127.0.0.1; API_PORT=3000; ACME_EMAIL=""
 case "$WEB_MODE" in
   1)
@@ -236,22 +230,24 @@ case "$WEB_MODE" in
     PUBLIC_URL="https://$DOMAIN"
     ;;
   2)
-    CADDY_TARGET=cloudflare
-    echo "Ports Cloudflare can proxy (orange cloud): 2053 2083 2087 2096 8443 — any free port works with DNS only (grey cloud)."
+    CADDY_TLS=internal; TRUSTED_PROXIES="$CLOUDFLARE_IPS"; HOPS=2
+    echo "Cloudflare forwards HTTPS only to ports 443, 2053, 2083, 2087, 2096 and 8443."
     while :; do
       ask HTTPS_PORT "HTTPS port" "8443"
-      [[ "$HTTPS_PORT" =~ ^[0-9]+$ ]] && ! port_busy "$HTTPS_PORT" && break
-      warn "Port $HTTPS_PORT is not a number or is already in use"
+      if ! [[ "$HTTPS_PORT" =~ ^(443|2053|2083|2087|2096|8443)$ ]]; then warn "Use one of 2053 2083 2087 2096 8443"; continue; fi
+      port_busy "$HTTPS_PORT" && { warn "Port $HTTPS_PORT is already in use"; continue; }
+      break
     done
     # caddy still listens on :80 inside its container (HTTP->HTTPS redirect); keep it off the public interface.
     HTTP_PORT="127.0.0.1:$((HTTPS_PORT + 1))"
     while port_busy "${HTTP_PORT#127.0.0.1:}"; do HTTP_PORT="127.0.0.1:$(( ${HTTP_PORT#127.0.0.1:} + 1 ))"; done
+    PUBLIC_URL="https://$DOMAIN:$HTTPS_PORT"
     echo
-    echo "Create a Cloudflare API token: dash.cloudflare.com → My Profile → API Tokens → Create Token"
-    echo "→ template 'Edit zone DNS' → Zone Resources: the zone of $DOMAIN."
-    while [ -z "$CF_API_TOKEN" ]; do read -r -s -p "Cloudflare API token: " CF_API_TOKEN; echo; done
-    ask ACME_EMAIL "Email for the SSL certificate (Let's Encrypt)"
-    PUBLIC_URL="https://$DOMAIN"; [ "$HTTPS_PORT" = 443 ] || PUBLIC_URL="https://$DOMAIN:$HTTPS_PORT"
+    echo "In Cloudflare: DNS → the A record of $DOMAIN must be Proxied (orange cloud);"
+    echo "SSL/TLS → Overview → encryption mode \"Full\" (not \"Full (strict)\")."
+    echo "Optional: Rules → Origin Rules → rewrite the destination port to $HTTPS_PORT for $DOMAIN,"
+    echo "then the gateway works on https://$DOMAIN without a port."
+    ask PUBLIC_URL "Public URL of the gateway" "$PUBLIC_URL"
     ;;
   3)
     PROFILES=""
@@ -320,8 +316,9 @@ set_env PUBLIC_BASE_URL "$PUBLIC_URL" .env
 set_env COMPOSE_PROFILES "$PROFILES" .env
 set_env HTTP_PORT "$HTTP_PORT" .env
 set_env HTTPS_PORT "$HTTPS_PORT" .env
-set_env CADDY_TARGET "$CADDY_TARGET" .env
-set_env CF_API_TOKEN "$CF_API_TOKEN" .env
+set_env CADDY_TLS "$CADDY_TLS" .env
+set_env TRUSTED_PROXIES "$TRUSTED_PROXIES" .env
+set_env TRUST_PROXY_HOPS "$HOPS" .env
 set_env API_BIND "$API_BIND" .env
 set_env API_PORT "$API_PORT" .env
 # Containers reach a proxy on this host through host.docker.internal, not 127.0.0.1.
@@ -350,7 +347,18 @@ else
   DOMAIN="$(get_env DOMAIN)"; ACME_EMAIL="$(get_env ACME_EMAIL)"; PUBLIC_URL="$(get_env PUBLIC_BASE_URL)"
   API_BIND="$(get_env API_BIND)"; API_PORT="$(get_env API_PORT)"; HTTPS_PORT="$(get_env HTTPS_PORT)"
   PROXY="$(get_env BUILD_PROXY)"
-  if [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3; elif [ "$(get_env CADDY_TARGET)" = cloudflare ]; then WEB_MODE=2; else WEB_MODE=1; fi
+  if [ "$(get_env CADDY_TARGET)" = cloudflare ]; then
+    # The Cloudflare-DNS certificate mode needed Go modules (blocked in some countries); switch to the proxy mode.
+    warn "Switching option 2 to 'behind the Cloudflare proxy' (no Caddy build needed)."
+    sed -i '/^CADDY_TARGET=/d; /^CF_API_TOKEN=/d; /^GOPROXY=/d' .env
+    set_env CADDY_TLS internal .env; set_env TRUSTED_PROXIES "$CLOUDFLARE_IPS" .env; set_env TRUST_PROXY_HOPS 2 .env
+    if ! [[ "$HTTPS_PORT" =~ ^(443|2053|2083|2087|2096|8443)$ ]]; then
+      warn "Port $HTTPS_PORT is not one Cloudflare forwards to; using 8443."
+      HTTPS_PORT=8443; set_env HTTPS_PORT 8443 .env; set_env PUBLIC_BASE_URL "https://$DOMAIN:8443" .env; PUBLIC_URL="https://$DOMAIN:8443"
+    fi
+    echo "In Cloudflare set the A record of $DOMAIN to Proxied (orange cloud) and SSL/TLS mode to \"Full\"."
+  fi
+  if [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3; elif [ "$(get_env CADDY_TLS)" = internal ]; then WEB_MODE=2; else WEB_MODE=1; fi
   ask ADMIN_EMAIL "Admin panel login email" "${ACME_EMAIL:-admin@$DOMAIN}"
   while :; do
     read -r -s -p "Admin panel password (min 10 chars): " ADMIN_PASSWORD; echo
@@ -424,7 +432,10 @@ install_backup_cron
 
 # ---------------------------------------------------------------- summary
 FORWARD_NOTE=""
-if [ "$WEB_MODE" = 3 ]; then
+if [ "$WEB_MODE" = 2 ]; then
+  FORWARD_NOTE="
+  Cloudflare      : A record of $DOMAIN Proxied (orange cloud), SSL/TLS mode \"Full\""
+elif [ "$WEB_MODE" = 3 ]; then
   FORWARD_NOTE="
   Reverse proxy   : forward $DOMAIN to http://$API_BIND:$API_PORT
                     (keep the Host header, set X-Forwarded-For and X-Forwarded-Proto)"

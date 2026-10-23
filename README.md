@@ -55,13 +55,13 @@ sudo bash install.sh
 
 ### سرور ایران / پورت‌های اشغال
 نصاب در ابتدا این‌ها را می‌پرسد:
-- **پراکسی برای نصب (اختیاری)**: فقط اگر سرور به GitHub / Docker Hub / npm دسترسی ندارد. اگر Docker Hub مسدود باشد، Docker هم روی همین پراکسی تنظیم می‌شود.
-- **نحوه دسترسی وب**: ۱) پورت ۸۰/۴۴۳ معمولی؛ ۲) پورت دلخواه مثل `https://domain:8443` با گواهی از طریق DNS کلودفلر (DNS دامنه روی Cloudflare و یک API Token با دسترسی Edit zone DNS)؛ ۳) پشت reverse proxy موجود روی همان سرور (nginx / Nginx Proxy Manager / Traefik) که دامنه را به `http://172.17.0.1:3080` فوروارد می‌کند.
+- **پراکسی برای نصب (اختیاری)**: معمولاً لازم نیست؛ اگر Docker Hub یا npm در دسترس نباشد نصاب خودش میرورهای ایرانی (آروان، focker، ایران‌سرور، ...) را با دانلود واقعی تست می‌کند و اولین میرور سالم را برمی‌دارد (`DOCKERHUB` و `NPM_REGISTRY` در `.env`).
+- **نحوه دسترسی وب**: ۱) پورت ۸۰/۴۴۳ معمولی؛ ۲) پورت دیگر پشت پراکسی Cloudflare مثل `https://domain:8443` (رکورد A نارنجی/Proxied، حالت SSL «Full»؛ پورت‌های مجاز Cloudflare: 2053، 2083، 2087، 2096، 8443؛ با Origin Rule می‌شود پورت را از آدرس حذف کرد)؛ ۳) پشت reverse proxy موجود روی همان سرور (nginx / Nginx Proxy Manager / Traefik) که دامنه را به `http://172.17.0.1:3080` فوروارد می‌کند.
 - **شبکه**: mainnet یا testnet (TRON Nile، BSC testnet، TON testnet).
 
 **پراکسی ارتباط‌های خارجی** (TronGrid، toncenter، RPCها، CoinGecko، تلگرام، وب‌هوک‌ها) در پنل ادمین → «پراکسی و اتصال» تنظیم می‌شود: HTTP یا SOCKS5، با دکمه تست که دسترسی به همه سرویس‌ها را نشان می‌دهد؛ تغییر ظرف ۳۰ ثانیه بدون ری‌استارت روی API، worker و signer اعمال می‌شود. برای پراکسیِ روی همان سرور `127.0.0.1` بنویسید (خودکار به آدرس قابل دسترس از داخل Docker تبدیل می‌شود) و برنامه پراکسی باید روی `0.0.0.0` گوش بدهد.
 
-همه این‌ها بعداً در `.env` قابل تغییرند (`OUTBOUND_PROXY`، `BUILD_PROXY`، `HTTPS_PORT`، `CADDY_TARGET`، `COMPOSE_PROFILES`، `API_BIND`، `API_PORT`) و بعد `docker compose up -d --build`.
+همه این‌ها بعداً در `.env` قابل تغییرند (`OUTBOUND_PROXY`، `BUILD_PROXY`، `HTTPS_PORT`، `CADDY_TLS`، `COMPOSE_PROFILES`، `API_BIND`، `API_PORT`) و بعد `docker compose up -d --build`.
 
 بعد از نصب: کیف‌های داغ را برای کارمزد شبکه شارژ کنید، در `/admin` پذیرنده بسازید، و پذیرنده در `/panel` آدرس تسویه و زمان‌بندی را تنظیم کند.
 
