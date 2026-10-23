@@ -199,16 +199,15 @@ ask DOMAIN "Domain for the gateway (DNS A record must point to this server), e.g
 
 echo
 echo "How should visitors reach the gateway?"
-echo "  1) HTTPS on ports 80 + 443 (standard, the ports must be free)"
-echo "  2) Behind Cloudflare (orange cloud, SSL \"Flexible\") on another port, e.g. https://$DOMAIN:8443"
-echo "     — like a Caddy server on port 80, but on a free port. Use when 80/443 are taken."
+echo "  1) Behind Cloudflare (orange cloud, SSL/TLS mode \"Flexible\"): Cloudflare serves HTTPS,"
+echo "     this server answers plain HTTP on port 80 (or another free port if 80 is taken)"
+echo "  2) Own Let's Encrypt certificate on ports 80 + 443 (no Cloudflare proxy: grey cloud)"
 echo "  3) Behind a reverse proxy that already runs on this server (nginx, Caddy, Traefik,"
 echo "     Nginx Proxy Manager...) — it keeps 80/443 and forwards $DOMAIN to the gateway"
 echo "  4) Direct HTTPS on another port without the Cloudflare proxy (grey cloud): the gateway gets"
 echo "     its own Let's Encrypt certificate through the Cloudflare DNS API (needs an API token)"
 WEB_DEFAULT=1
 if port_busy 80 || port_busy 443; then
-  WEB_DEFAULT=2
   warn "Port 80 or 443 is already in use on this server:"
   ss -ltnpH '( sport = :80 or sport = :443 )' 2>/dev/null || true
   docker ps --format '  container {{.Names}}: {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true
@@ -218,7 +217,7 @@ ask WEB_MODE "Choose 1, 2, 3 or 4" "$WEB_DEFAULT"
 HTTP_PORT=80; HTTPS_PORT=443; CADDY_TLS=acme; CADDY_SITE=""; TRUSTED_PROXIES=""; HOPS=1; PROFILES=caddy; API_TLS=off; CF_API_TOKEN=""
 API_BIND=127.0.0.1; API_PORT=3000; ACME_EMAIL=""
 case "$WEB_MODE" in
-  1)
+  2)
     if port_busy 80 || port_busy 443; then
       for svc in caddy nginx apache2 httpd; do
         if systemctl is-active --quiet "$svc" 2>/dev/null && yes_no "System service '$svc' uses port 80/443. Stop and disable it?" n; then
@@ -226,30 +225,30 @@ case "$WEB_MODE" in
         fi
       done
       if port_busy 80 || port_busy 443; then
-        die "Ports 80/443 are still in use. Re-run and choose option 2 or 3."
+        die "Ports 80/443 are still in use. Re-run and choose option 1 or 3."
       fi
     fi
     while [ -z "$ACME_EMAIL" ]; do ask ACME_EMAIL "Email for the SSL certificate (Let's Encrypt)"; done
     PUBLIC_URL="https://$DOMAIN"
     ;;
-  2)
-    # Same as a Caddy server on port 80 behind Cloudflare "Flexible", only on another port:
-    # Cloudflare serves HTTPS to visitors and connects to this port with plain HTTP.
+  1)
+    # Cloudflare serves HTTPS to visitors and connects to this server with plain HTTP (port 80,
+    # or another port through a Cloudflare Origin Rule when 80 is taken).
     CADDY_TLS=off; CADDY_SITE="http://$DOMAIN"; TRUSTED_PROXIES="$CLOUDFLARE_IPS"; HOPS=2
-    echo "Without a Cloudflare Origin Rule the port must be one Cloudflare forwards: 2053 2083 2087 2096 8443."
+    PORT_DEFAULT=80; port_busy 80 && PORT_DEFAULT=8880
     while :; do
-      ask HTTP_PORT "Port" "8443"
+      ask HTTP_PORT "HTTP port" "$PORT_DEFAULT"
       [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] && ! port_busy "$HTTP_PORT" && break
       warn "Port $HTTP_PORT is not a number or is already in use"
     done
     HTTPS_PORT="127.0.0.1:$((HTTP_PORT + 1))" # unused in this mode; kept off the public interface
     while port_busy "${HTTPS_PORT#127.0.0.1:}"; do HTTPS_PORT="127.0.0.1:$(( ${HTTPS_PORT#127.0.0.1:} + 1 ))"; done
-    PUBLIC_URL="https://$DOMAIN:$HTTP_PORT"
+    PUBLIC_URL="https://$DOMAIN"
     echo
     echo "In Cloudflare: A record of $DOMAIN → this server, Proxied (orange cloud), SSL/TLS mode \"Flexible\"."
-    echo "Optional: Rules → Origin Rules → for $DOMAIN rewrite the destination port to $HTTP_PORT;"
-    echo "then the gateway answers on https://$DOMAIN without a port."
-    ask PUBLIC_URL "Public URL of the gateway" "$PUBLIC_URL"
+    if [ "$HTTP_PORT" != 80 ]; then
+      echo "Port $HTTP_PORT: add Rules → Origin Rules → Hostname equals $DOMAIN → Destination Port: rewrite to $HTTP_PORT."
+    fi
     ;;
   3)
     PROFILES=""
@@ -370,7 +369,7 @@ else
   API_BIND="$(get_env API_BIND)"; API_PORT="$(get_env API_PORT)"; HTTPS_PORT="$(get_env HTTPS_PORT)"; HTTP_PORT="$(get_env HTTP_PORT)"
   PROXY="$(get_env BUILD_PROXY)"
   if [ "$(get_env API_TLS)" = acme-dns ]; then WEB_MODE=4; elif [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3
-  elif [ "$(get_env CADDY_TLS)" = off ]; then WEB_MODE=2; else WEB_MODE=1; fi
+  elif [ "$(get_env CADDY_TLS)" = off ]; then WEB_MODE=1; else WEB_MODE=2; fi
   ask ADMIN_EMAIL "Admin panel login email" "${ACME_EMAIL:-admin@$DOMAIN}"
   while :; do
     read -r -s -p "Admin panel password (min 10 chars): " ADMIN_PASSWORD; echo
@@ -434,8 +433,8 @@ docker compose run --rm -T api node dist/bin/create-admin.js --email "$ADMIN_EMA
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
   say "Opening the web port(s) in ufw"
   case "$WEB_MODE" in
-    1) ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null ;;
-    2) ufw allow "$HTTP_PORT/tcp" >/dev/null ;;
+    1) ufw allow "$HTTP_PORT/tcp" >/dev/null ;;
+    2) ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null ;;
     4) ufw allow "$API_PORT/tcp" >/dev/null ;;
   esac
 fi
@@ -446,7 +445,7 @@ install_backup_cron
 
 # ---------------------------------------------------------------- summary
 FORWARD_NOTE=""
-if [ "$WEB_MODE" = 2 ]; then
+if [ "$WEB_MODE" = 1 ]; then
   FORWARD_NOTE="
   Cloudflare      : A record of $DOMAIN Proxied (orange cloud), SSL/TLS mode \"Flexible\""
 elif [ "$WEB_MODE" = 4 ]; then
