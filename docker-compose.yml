@@ -4,7 +4,8 @@
 # Everything below is driven by .env (written by install.sh):
 #   COMPOSE_PROFILES=caddy      run the bundled HTTPS proxy (empty = an existing proxy forwards to the API)
 #   HTTP_PORT / HTTPS_PORT      host ports for caddy (default 80/443)
-#   CADDY_TLS=internal|origin   behind Cloudflare: self-signed (SSL Full) or Cloudflare Origin Certificate (Full strict)
+#   CADDY_TLS=off               behind Cloudflare SSL "Flexible": plain HTTP on HTTP_PORT (with CADDY_SITE=http://<domain>)
+#   CADDY_TLS=internal|origin   behind Cloudflare SSL "Full" / "Full (strict)"
 #   API_BIND / API_PORT         where the API is published on the host (default 127.0.0.1:3000)
 #   BUILD_PROXY                 proxy for image builds (npm), as seen from the host
 #   DOCKERHUB / NPM_REGISTRY    mirrors for servers that cannot reach Docker Hub or npm
@@ -52,6 +53,7 @@ services:
     profiles: [caddy]
     env_file: .env # DOMAIN, ACME_EMAIL, CADDY_TLS, TRUSTED_PROXIES
     environment:
+      CADDY_SITE: ${CADDY_SITE:-${DOMAIN}} # http://<domain> when Cloudflare (Flexible) does HTTPS
       HTTP_PROXY: ${OUTBOUND_PROXY:-}
       HTTPS_PROXY: ${OUTBOUND_PROXY:-}
       NO_PROXY: api,localhost,127.0.0.1

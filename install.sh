@@ -88,6 +88,9 @@ check_outbound() {
 DOCKER_MIRRORS="docker.io docker.arvancloud.ir focker.ir docker.iranserver.com registry.docker.ir hub.hamdocker.ir docker.mobinhost.com"
 NPM_MIRRORS="https://registry.npmjs.org/ https://registry.npmmirror.com/"
 
+# Cloudflare edge ranges (cloudflare.com/ips): the only peers allowed to set X-Forwarded-For in mode 2.
+CLOUDFLARE_IPS="173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32"
+
 reachable() { curl -sf -o /dev/null --connect-timeout 8 --max-time 20 "$@"; }
 
 ensure_build_sources() {
@@ -197,11 +200,12 @@ ask DOMAIN "Domain for the gateway (DNS A record must point to this server), e.g
 echo
 echo "How should visitors reach the gateway?"
 echo "  1) HTTPS on ports 80 + 443 (standard, the ports must be free)"
-echo "  2) HTTPS on another port, e.g. https://$DOMAIN:8443 — use when 80/443 are taken."
-echo "     Real Let's Encrypt certificate via the Cloudflare DNS API (domain's DNS on Cloudflare,"
-echo "     record DNS only / grey cloud). No Cloudflare proxy, no port 80 needed."
+echo "  2) Behind Cloudflare (orange cloud, SSL \"Flexible\") on another port, e.g. https://$DOMAIN:8443"
+echo "     — like a Caddy server on port 80, but on a free port. Use when 80/443 are taken."
 echo "  3) Behind a reverse proxy that already runs on this server (nginx, Caddy, Traefik,"
 echo "     Nginx Proxy Manager...) — it keeps 80/443 and forwards $DOMAIN to the gateway"
+echo "  4) Direct HTTPS on another port without the Cloudflare proxy (grey cloud): the gateway gets"
+echo "     its own Let's Encrypt certificate through the Cloudflare DNS API (needs an API token)"
 WEB_DEFAULT=1
 if port_busy 80 || port_busy 443; then
   WEB_DEFAULT=2
@@ -209,9 +213,9 @@ if port_busy 80 || port_busy 443; then
   ss -ltnpH '( sport = :80 or sport = :443 )' 2>/dev/null || true
   docker ps --format '  container {{.Names}}: {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true
 fi
-ask WEB_MODE "Choose 1, 2 or 3" "$WEB_DEFAULT"
+ask WEB_MODE "Choose 1, 2, 3 or 4" "$WEB_DEFAULT"
 
-HTTP_PORT=80; HTTPS_PORT=443; CADDY_TLS=acme; TRUSTED_PROXIES=""; HOPS=1; PROFILES=caddy; API_TLS=off; CF_API_TOKEN=""
+HTTP_PORT=80; HTTPS_PORT=443; CADDY_TLS=acme; CADDY_SITE=""; TRUSTED_PROXIES=""; HOPS=1; PROFILES=caddy; API_TLS=off; CF_API_TOKEN=""
 API_BIND=127.0.0.1; API_PORT=3000; ACME_EMAIL=""
 case "$WEB_MODE" in
   1)
@@ -229,6 +233,38 @@ case "$WEB_MODE" in
     PUBLIC_URL="https://$DOMAIN"
     ;;
   2)
+    # Same as a Caddy server on port 80 behind Cloudflare "Flexible", only on another port:
+    # Cloudflare serves HTTPS to visitors and connects to this port with plain HTTP.
+    CADDY_TLS=off; CADDY_SITE="http://$DOMAIN"; TRUSTED_PROXIES="$CLOUDFLARE_IPS"; HOPS=2
+    echo "Without a Cloudflare Origin Rule the port must be one Cloudflare forwards: 2053 2083 2087 2096 8443."
+    while :; do
+      ask HTTP_PORT "Port" "8443"
+      [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] && ! port_busy "$HTTP_PORT" && break
+      warn "Port $HTTP_PORT is not a number or is already in use"
+    done
+    HTTPS_PORT="127.0.0.1:$((HTTP_PORT + 1))" # unused in this mode; kept off the public interface
+    while port_busy "${HTTPS_PORT#127.0.0.1:}"; do HTTPS_PORT="127.0.0.1:$(( ${HTTPS_PORT#127.0.0.1:} + 1 ))"; done
+    PUBLIC_URL="https://$DOMAIN:$HTTP_PORT"
+    echo
+    echo "In Cloudflare: A record of $DOMAIN → this server, Proxied (orange cloud), SSL/TLS mode \"Flexible\"."
+    echo "Optional: Rules → Origin Rules → for $DOMAIN rewrite the destination port to $HTTP_PORT;"
+    echo "then the gateway answers on https://$DOMAIN without a port."
+    ask PUBLIC_URL "Public URL of the gateway" "$PUBLIC_URL"
+    ;;
+  3)
+    PROFILES=""
+    DOCKER0_IP="$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+    echo "The gateway API will listen on plain HTTP; your reverse proxy terminates HTTPS and forwards to it."
+    echo "Bind ${DOCKER0_IP:-172.17.0.1} = reachable from the host and from containers, not from the internet."
+    ask API_BIND "Bind address" "${DOCKER0_IP:-127.0.0.1}"
+    while :; do
+      ask API_PORT "Port" "3080"
+      [[ "$API_PORT" =~ ^[0-9]+$ ]] && ! port_busy "$API_PORT" && break
+      warn "Port $API_PORT is not a number or is already in use"
+    done
+    ask PUBLIC_URL "Public URL of the gateway (as visitors see it)" "https://$DOMAIN"
+    ;;
+  4)
     # The API serves HTTPS itself; the worker gets and renews the certificate (DNS-01 via Cloudflare).
     PROFILES=""; API_TLS=acme-dns; API_BIND=0.0.0.0; HOPS=0
     while :; do
@@ -245,20 +281,7 @@ case "$WEB_MODE" in
     PUBLIC_URL="https://$DOMAIN:$API_PORT"; [ "$API_PORT" = 443 ] && PUBLIC_URL="https://$DOMAIN"
     echo "In Cloudflare DNS the A record of $DOMAIN must point to this server and be \"DNS only\" (grey cloud)."
     ;;
-  3)
-    PROFILES=""
-    DOCKER0_IP="$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
-    echo "The gateway API will listen on plain HTTP; your reverse proxy terminates HTTPS and forwards to it."
-    echo "Bind ${DOCKER0_IP:-172.17.0.1} = reachable from the host and from containers, not from the internet."
-    ask API_BIND "Bind address" "${DOCKER0_IP:-127.0.0.1}"
-    while :; do
-      ask API_PORT "Port" "3080"
-      [[ "$API_PORT" =~ ^[0-9]+$ ]] && ! port_busy "$API_PORT" && break
-      warn "Port $API_PORT is not a number or is already in use"
-    done
-    ask PUBLIC_URL "Public URL of the gateway (as visitors see it)" "https://$DOMAIN"
-    ;;
-  *) die "Choose 1, 2 or 3" ;;
+  *) die "Choose 1, 2, 3 or 4" ;;
 esac
 PUBLIC_URL="${PUBLIC_URL%/}"
 
@@ -313,6 +336,7 @@ set_env COMPOSE_PROFILES "$PROFILES" .env
 set_env HTTP_PORT "$HTTP_PORT" .env
 set_env HTTPS_PORT "$HTTPS_PORT" .env
 set_env CADDY_TLS "$CADDY_TLS" .env
+set_env CADDY_SITE "$CADDY_SITE" .env
 set_env API_TLS "$API_TLS" .env
 set_env CF_API_TOKEN "$CF_API_TOKEN" .env
 set_env TRUSTED_PROXIES "$TRUSTED_PROXIES" .env
@@ -343,9 +367,10 @@ fi
 
 else
   DOMAIN="$(get_env DOMAIN)"; ACME_EMAIL="$(get_env ACME_EMAIL)"; PUBLIC_URL="$(get_env PUBLIC_BASE_URL)"
-  API_BIND="$(get_env API_BIND)"; API_PORT="$(get_env API_PORT)"; HTTPS_PORT="$(get_env HTTPS_PORT)"
+  API_BIND="$(get_env API_BIND)"; API_PORT="$(get_env API_PORT)"; HTTPS_PORT="$(get_env HTTPS_PORT)"; HTTP_PORT="$(get_env HTTP_PORT)"
   PROXY="$(get_env BUILD_PROXY)"
-  if [ "$(get_env API_TLS)" = acme-dns ]; then WEB_MODE=2; elif [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3; else WEB_MODE=1; fi
+  if [ "$(get_env API_TLS)" = acme-dns ]; then WEB_MODE=4; elif [ -z "$(get_env COMPOSE_PROFILES)" ]; then WEB_MODE=3
+  elif [ "$(get_env CADDY_TLS)" = off ]; then WEB_MODE=2; else WEB_MODE=1; fi
   ask ADMIN_EMAIL "Admin panel login email" "${ACME_EMAIL:-admin@$DOMAIN}"
   while :; do
     read -r -s -p "Admin panel password (min 10 chars): " ADMIN_PASSWORD; echo
@@ -410,7 +435,8 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: a
   say "Opening the web port(s) in ufw"
   case "$WEB_MODE" in
     1) ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null ;;
-    2) ufw allow "$API_PORT/tcp" >/dev/null ;;
+    2) ufw allow "$HTTP_PORT/tcp" >/dev/null ;;
+    4) ufw allow "$API_PORT/tcp" >/dev/null ;;
   esac
 fi
 
@@ -421,6 +447,9 @@ install_backup_cron
 # ---------------------------------------------------------------- summary
 FORWARD_NOTE=""
 if [ "$WEB_MODE" = 2 ]; then
+  FORWARD_NOTE="
+  Cloudflare      : A record of $DOMAIN Proxied (orange cloud), SSL/TLS mode \"Flexible\""
+elif [ "$WEB_MODE" = 4 ]; then
   FORWARD_NOTE="
   Certificate     : requested by the worker within a minute (admin panel → Proxy & connectivity).
                     If Cloudflare / Let's Encrypt are unreachable, set the proxy on that page first."

@@ -24,7 +24,12 @@
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
 }
 
-{$DOMAIN} {
+# Behind Cloudflare with SSL mode "Flexible" (like the RadiusCloud servers): Cloudflare serves HTTPS
+# to visitors and talks plain HTTP to this server; CADDY_SITE is then http://<domain>.
+(tls_off) {
+}
+
+{$CADDY_SITE} {
 	import tls_{$CADDY_TLS:acme}
 	encode gzip
 	reverse_proxy api:3000
