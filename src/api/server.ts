@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import https from 'node:https';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyError } from 'fastify';
+import Fastify, { type FastifyError, type FastifyServerFactory } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -64,8 +65,15 @@ async function publicView(inv: InvoiceRow) {
   };
 }
 
-export async function buildServer() {
-  const app = Fastify({ logger: { level: config.LOG_LEVEL }, trustProxy: (_addr: string, hop: number) => hop < config.TRUST_PROXY_HOPS, bodyLimit: 64 * 1024 });
+/** `tls`: serve HTTPS directly (API_TLS=acme-dns) — certificates are picked per connection via SNICallback. */
+export async function buildServer(opts: { tls?: https.ServerOptions } = {}) {
+  const serverFactory = opts.tls ? (((handler: import('node:http').RequestListener) => https.createServer(opts.tls!, handler)) as unknown as FastifyServerFactory) : undefined;
+  const app = Fastify({
+    logger: { level: config.LOG_LEVEL },
+    trustProxy: (_addr: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
+    bodyLimit: 64 * 1024,
+    ...(serverFactory ? { serverFactory } : {}),
+  });
 
   app.setErrorHandler((err: FastifyError | InvoiceError, req, reply) => {
     if (err instanceof InvoiceError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });

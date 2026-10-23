@@ -24,6 +24,13 @@ const schema = z.object({
   TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(1),
   // http(s)://host:port — all outbound calls (blockchain APIs, prices, webhooks) go through it.
   OUTBOUND_PROXY: optionalString,
+  // acme-dns: the API itself serves HTTPS on PORT with a Let's Encrypt certificate obtained through the
+  // Cloudflare DNS API (no port 80 needed). off: plain HTTP behind caddy or another reverse proxy.
+  API_TLS: z.enum(['off', 'acme-dns']).default('off'),
+  DOMAIN: optionalString,
+  ACME_EMAIL: optionalString,
+  CF_API_TOKEN: optionalString,
+  ACME_DIRECTORY_URL: z.string().default('https://acme-v02.api.letsencrypt.org/directory'),
   ADMIN_TOKEN: optionalString,
 
   INVOICE_TTL_MINUTES: z.coerce.number().int().positive().default(30),

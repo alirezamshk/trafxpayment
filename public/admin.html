@@ -50,6 +50,17 @@ async function refreshCounts() {
   } catch { /* counters are best-effort */ }
 }
 
+// HTTPS certificate status (API_TLS=acme-dns): the worker obtains it from Let's Encrypt via Cloudflare DNS.
+function tlsBox(x) {
+  const st = x.status;
+  if (x.issuer && (!st || st.state === 'ok')) {
+    return alertBox('ok', esc(t('a.tls.ok', { i: x.issuer, d: fmtDate(x.not_after) })), 'lock');
+  }
+  if (!st || st.state === 'pending') return alertBox('info', esc(t('a.tls.pending')), 'clock');
+  return alertBox('err', `${esc(t('a.tls.err'))}<div class="small" style="margin-top:4px"><bdi>${esc(st.message)}</bdi></div>
+    <div class="small text-2" style="margin-top:4px">${esc(t('a.tls.retry', { t: fmtDate(st.checked_at) }))}</div>`);
+}
+
 const VIEWS = {
   async overview(el, ctx) {
     ctx.setHeader(t('a.nav.overview'), esc(t('a.ov.sub')));
@@ -192,6 +203,7 @@ const VIEWS = {
             <button type="submit" class="btn" id="net-save">${esc(t('a.net.save'))}</button>
           </div>
         </form>` })}
+      ${cur.tls ? panel({ title: t('a.tls.title'), desc: esc(t('a.tls.desc', { d: cur.tls.domain })), body: tlsBox(cur.tls) }) : ''}
       ${panel({ title: t('a.net.current'), id: 'net-res-panel', flush: true, body: '<div id="net-res"></div>' })}`;
     const urlInput = $('#net-url', el);
     const render = (r) => {

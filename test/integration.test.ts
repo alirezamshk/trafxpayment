@@ -636,3 +636,101 @@ describe('outbound proxy', () => {
     applyOutboundProxy(null, () => {}); // the PUT applied it to this process
   });
 });
+
+describe('TLS certificates (API_TLS=acme-dns)', () => {
+  // A fake Cloudflare API that knows one zone and records what was created / deleted.
+  async function fakeCloudflare() {
+    const http = await import('node:http');
+    const calls: string[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        calls.push(`${req.method} ${req.url} ${body}`.trim());
+        const ok = (result: unknown) => res.end(JSON.stringify({ success: true, result }));
+        if (req.headers.authorization !== 'Bearer tok') return res.writeHead(403).end(JSON.stringify({ success: false, errors: [{ message: 'Invalid API Token' }] }));
+        if (req.url?.startsWith('/zones?name=')) return ok(req.url.endsWith('=trafx.cloud') ? [{ id: 'z1' }] : []);
+        if (req.method === 'POST') return ok({ id: 'r1' });
+        if (req.method === 'DELETE') return ok({ id: 'r1' });
+        res.writeHead(404).end('{}');
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    return { base: `http://127.0.0.1:${(srv.address() as { port: number }).port}`, calls, close: () => srv.close() };
+  }
+
+  it('creates and removes the challenge TXT record in the right Cloudflare zone', async () => {
+    const { cloudflareDns } = await import('../src/services/certificates.js');
+    const cf = await fakeCloudflare();
+    try {
+      const remove = await cloudflareDns('tok', cf.base).createTxt('_acme-challenge.payment.trafx.cloud', 'abc');
+      await remove();
+      expect(cf.calls).toEqual([
+        'GET /zones?name=payment.trafx.cloud',
+        'GET /zones?name=trafx.cloud',
+        'POST /zones/z1/dns_records {"type":"TXT","name":"_acme-challenge.payment.trafx.cloud","content":"abc","ttl":60}',
+        'DELETE /zones/z1/dns_records/r1',
+      ]);
+      await expect(cloudflareDns('bad', cf.base).createTxt('_acme-challenge.x.trafx.cloud', 'v')).rejects.toThrow(/Invalid API Token/);
+    } finally {
+      cf.close();
+    }
+  });
+
+  it('serves HTTPS with a stand-in certificate and switches to the stored one without a restart', async () => {
+    const { liveTlsOptions, placeholderCertificate } = await import('../src/services/certificates.js');
+    const https = await import('node:https');
+    const live = await liveTlsOptions(pool, 'pay.example.com', () => {}, 3_600_000);
+    const app = await buildServer({ tls: live.options });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const port = (app.server.address() as { port: number }).port;
+    const peer = () => new Promise<{ fp: string; body: string }>((resolve, reject) => {
+      https.get({ host: '127.0.0.1', port, path: '/health', servername: 'pay.example.com', rejectUnauthorized: false, agent: false }, (res) => {
+        const fp = (res.socket as import('node:tls').TLSSocket).getPeerCertificate().fingerprint256;
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ fp, body }));
+      }).on('error', reject);
+    });
+    try {
+      const before = await peer();
+      expect(before.body).toContain('"ok":true');
+      const next = await placeholderCertificate('pay.example.com');
+      await pool.query(`INSERT INTO system_settings (key, value) VALUES ('tls_certificate', $1)`, [
+        JSON.stringify({ domain: 'pay.example.com', cert: next.cert, key: next.key, issuer: 'test', not_after: '2099-01-01T00:00:00Z', issued_at: 'v2' }),
+      ]);
+      await live.refresh();
+      const after = await peer();
+      expect(after.fp).not.toBe(before.fp);
+      expect(after.body).toContain('"ok":true');
+    } finally {
+      live.stop();
+      await app.close();
+    }
+  });
+
+  it('decides when to renew', async () => {
+    const { needsRenewal } = await import('../src/services/certificates.js');
+    const c = (days: number) => ({ domain: 'a.io', cert: '', key: '', issuer: '', issued_at: '', not_after: new Date(Date.now() + days * 86_400_000).toISOString() });
+    expect(needsRenewal(null, 'a.io')).toBe(true);
+    expect(needsRenewal(c(60), 'a.io')).toBe(false);
+    expect(needsRenewal(c(29), 'a.io')).toBe(true);
+    expect(needsRenewal(c(60), 'b.io')).toBe(true);
+  });
+
+  // Full ACME flow against Pebble (Let's Encrypt's test server); runs when PEBBLE_DIRECTORY is set.
+  it.skipIf(!process.env.PEBBLE_DIRECTORY)('obtains a certificate over DNS-01 and stores it', async () => {
+    const { issueCertificate, getCertificate } = await import('../src/services/certificates.js');
+    const records: string[] = [];
+    const removed: string[] = [];
+    const dns = { createTxt: async (name: string, value: string) => { records.push(name); return async () => { removed.push(value); }; } };
+    const log = { info() {}, warn() {}, error() {}, debug() {} };
+    const c = await issueCertificate(pool, { domain: 'pay.example.com', email: 'ops@example.com', dns, directoryUrl: process.env.PEBBLE_DIRECTORY!, propagationMs: 0, log });
+    expect(records).toEqual(['_acme-challenge.pay.example.com']);
+    expect(removed).toHaveLength(1);
+    expect(c.cert).toContain('BEGIN CERTIFICATE');
+    expect(c.issuer).toMatch(/Pebble/i);
+    expect(new Date(c.not_after).getTime()).toBeGreaterThan(Date.now());
+    expect((await getCertificate(pool))?.domain).toBe('pay.example.com');
+  }, 60_000);
+});

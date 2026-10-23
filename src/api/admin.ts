@@ -7,6 +7,8 @@ import { invoices, ledger } from '../services/index.js';
 import { createApiKey, createMerchant, getMerchant, listMerchants } from '../services/merchants.js';
 import { audit, auditList } from '../services/audit.js';
 import { getProxySetting, setProxySetting, testConnectivity } from '../services/network.js';
+import { getCertificate, getCertificateStatus } from '../services/certificates.js';
+import { config } from '../config.js';
 import { applyOutboundProxy, maskProxyUrl, parseProxyUrl } from '../lib/proxy.js';
 import { requireAdminSession } from './auth.js';
 import { otpFromRequest, requireOtp, resetTwoFactor, twoFactorRoutes } from './twofactor.js';
@@ -116,7 +118,13 @@ export async function adminRoutes(app: FastifyInstance) {
   // --- outbound proxy (blockchain APIs, prices, Telegram, webhooks)
   const proxyView = async () => {
     const p = await getProxySetting(pool);
-    return { url: maskProxyUrl(p.url), source: p.source };
+    return { url: maskProxyUrl(p.url), source: p.source, tls: await tlsView() };
+  };
+  // HTTPS certificate managed by the worker (API_TLS=acme-dns); null when caddy / a reverse proxy does TLS.
+  const tlsView = async () => {
+    if (config.API_TLS !== 'acme-dns') return null;
+    const [c, st] = await Promise.all([getCertificate(pool), getCertificateStatus(pool)]);
+    return { domain: config.DOMAIN, issuer: c?.issuer ?? null, not_after: c?.not_after ?? null, status: st };
   };
   const proxyUrlInput = z.object({ url: z.string().trim().max(500).nullable().optional() });
   const checkedProxy = (url: string | null | undefined) => {
