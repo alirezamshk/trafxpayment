@@ -620,20 +620,23 @@ describe('outbound proxy', () => {
     await createAdmin(pool, 'net@x.io', 'adminpassword1');
     const cookie = String((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'net@x.io', password: 'adminpassword1', role: 'admin' } })).headers['set-cookie']).split(';')[0]!;
     const put = (url: string | null) => app.inject({ method: 'PUT', url: '/api/admin/network', headers: { cookie }, payload: { url } });
+    const { applyOutboundProxy } = await import('../src/lib/proxy.js');
+    try {
 
     expect((await put('ftp://1.2.3.4:21')).json().error.code).toBe('invalid_proxy');
-    expect((await put('socks5://user:s3cret@10.0.0.5:1080')).json()).toEqual({ url: 'socks5://user:***@10.0.0.5:1080', source: 'panel' });
+    expect((await put('socks5://user:s3cret@10.0.0.5:1080')).json()).toEqual({ url: 'socks5://user:***@10.0.0.5:1080', source: 'panel', tls: null });
     expect((await put('socks5://user:***@10.0.0.5:1080')).statusCode).toBe(200);
     expect((await getProxySetting(pool)).url).toBe('socks5://user:s3cret@10.0.0.5:1080');
     const { rows } = await pool.query<{ details: string }>(`SELECT details::text FROM audit_log WHERE action LIKE 'admin PUT%'`);
     expect(rows.length).toBe(2);
     expect(rows.map((r) => r.details).join()).not.toContain('s3cret');
 
-    expect((await put(null)).json()).toEqual({ url: null, source: 'panel' });
+    expect((await put(null)).json()).toEqual({ url: null, source: 'panel', tls: null });
     await setProxySetting(pool, null);
-    await app.close();
-    const { applyOutboundProxy } = await import('../src/lib/proxy.js');
-    applyOutboundProxy(null, () => {}); // the PUT applied it to this process
+    } finally {
+      applyOutboundProxy(null, () => {}); // the PUTs applied the proxy to this process
+      await app.close();
+    }
   });
 });
 
