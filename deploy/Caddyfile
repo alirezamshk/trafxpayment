@@ -1,5 +1,4 @@
 {
-	email {$ACME_EMAIL}
 	skip_install_trust
 	servers {
 		# Only these may set X-Forwarded-For (Cloudflare ranges when the site sits behind Cloudflare).
@@ -8,8 +7,9 @@
 	}
 }
 
-# Let's Encrypt via ports 80/443.
+# Let's Encrypt via ports 80/443 (install.sh always sets ACME_EMAIL in this mode).
 (tls_acme) {
+	tls {$ACME_EMAIL}
 }
 
 # Behind Cloudflare (orange cloud, SSL mode "Full"): Cloudflare serves the public certificate,

@@ -226,7 +226,7 @@ case "$WEB_MODE" in
         die "Ports 80/443 are still in use. Re-run and choose option 2 or 3."
       fi
     fi
-    ask ACME_EMAIL "Email for the SSL certificate (Let's Encrypt)"
+    while [ -z "$ACME_EMAIL" ]; do ask ACME_EMAIL "Email for the SSL certificate (Let's Encrypt)"; done
     PUBLIC_URL="https://$DOMAIN"
     ;;
   2)
