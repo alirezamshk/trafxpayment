@@ -4,7 +4,7 @@ import { syncOutboundProxy } from '../services/network.js';
 import { registry } from '../context.js';
 import { ledger } from '../services/index.js';
 import { EvmSigner } from '../sweeper/evm.js';
-import { ColdStorageJob, PayoutJob, SweepJob } from '../sweeper/signer.js';
+import { ColdStorageJob, PayoutJob, SweepJob, WalletReportJob } from '../sweeper/signer.js';
 import { TonSigner } from '../sweeper/ton.js';
 import { TronSigner } from '../sweeper/tron.js';
 import type { ChainSigner } from '../sweeper/types.js';
@@ -61,6 +61,7 @@ const stop = runLoops(
     new SweepJob(signers, registry, ledger.settings, log),
     new PayoutJob(signers, registry, ledger, log),
     new ColdStorageJob(signers, (chain) => coldWallets[chain], registry, ledger.settings, log),
+    new WalletReportJob(signers, registry, (chain) => coldWallets[chain], log),
   ],
   log,
 );

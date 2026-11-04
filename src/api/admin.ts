@@ -8,6 +8,7 @@ import { createApiKey, createMerchant, getMerchant, listMerchants } from '../ser
 import { audit, auditList } from '../services/audit.js';
 import { getProxySetting, setProxySetting, testConnectivity } from '../services/network.js';
 import { getCertificate, getCertificateStatus } from '../services/certificates.js';
+import { getWalletReport } from '../sweeper/signer.js';
 import { config } from '../config.js';
 import { applyOutboundProxy, maskProxyUrl, parseProxyUrl } from '../lib/proxy.js';
 import { requireAdminSession } from './auth.js';
@@ -165,6 +166,66 @@ export async function adminRoutes(app: FastifyInstance) {
     const stored = (await getProxySetting(pool)).url;
     const target = url === undefined || (url && maskProxyUrl(stored) === url.replace(/\/$/, '')) ? stored : checkedProxy(url);
     return { proxy: maskProxyUrl(target), data: await testConnectivity(target) };
+  });
+
+  // --- wallets: hot wallets (reported by the signer), funds not yet swept, what is owed to merchants
+  // Below this native balance a hot wallet cannot reliably pay sweep gas and payouts.
+  const GAS_MIN: Record<string, string> = { tron: '20', bsc: '0.002', ethereum: '0.005', polygon: '1', ton: '0.5' };
+  const testnet = (chain: string) =>
+    chain === 'tron' ? config.TRON_API_URL.includes('nile') || config.TRON_API_URL.includes('shasta')
+    : chain === 'bsc' ? /prebsc|testnet/.test(config.BSC_RPC_URL ?? '')
+    : chain === 'ton' ? config.TON_API_URL.includes('testnet')
+    : false;
+  const explorer = (chain: string, address: string) => {
+    const t = testnet(chain);
+    switch (chain) {
+      case 'tron': return `https://${t ? 'nile.' : ''}tronscan.org/#/address/${address}`;
+      case 'bsc': return `https://${t ? 'testnet.' : ''}bscscan.com/address/${address}`;
+      case 'ethereum': return `https://etherscan.io/address/${address}`;
+      case 'polygon': return `https://polygonscan.com/address/${address}`;
+      case 'ton': return `https://${t ? 'testnet.' : ''}tonviewer.com/${address}`;
+      default: return null;
+    }
+  };
+  app.get('/wallets', async () => {
+    const report = await getWalletReport();
+    const { rows: unswept } = await pool.query<{ asset: string; amount: string; addresses: string }>(
+      `SELECT asset, SUM(amount) AS amount, COUNT(DISTINCT to_address) AS addresses FROM deposits
+       WHERE status = 'confirmed' AND swept_at IS NULL AND chain <> 'ton' GROUP BY asset`,
+    );
+    const totals = await ledger.platformSummary(pool);
+    const active = new Set((await invoices.activeAssets()).map((a) => a.id));
+    const wallets = (report?.wallets ?? []).map((w) => {
+      const chain = (invoices.registry.chains as Record<string, { name: string } | undefined>)[w.chain];
+      const native = invoices.registry.assets.find((a) => a.chain === w.chain && !a.contract);
+      const nativeBal = native && w.balances[native.id] != null ? fromBaseUnits(w.balances[native.id]!, native.decimals) : null;
+      return {
+        chain: w.chain,
+        network: chain?.name ?? w.chain,
+        testnet: testnet(w.chain),
+        address: w.address,
+        explorer: explorer(w.chain, w.address),
+        cold: w.cold,
+        cold_explorer: w.cold ? explorer(w.chain, w.cold) : null,
+        gas_asset: native?.id ?? null,
+        gas_min: GAS_MIN[w.chain] ?? null,
+        low_gas: nativeBal !== null && GAS_MIN[w.chain] !== undefined && Number(nativeBal) < Number(GAS_MIN[w.chain]),
+        assets: Object.entries(w.balances).map(([asset, v]) => {
+          const t = totals.find((x) => x.asset === asset);
+          const u = unswept.find((x) => x.asset === asset);
+          return {
+            asset,
+            active: active.has(asset),
+            hot: v === null ? null : fmt(asset, v),
+            unswept: fmt(asset, u?.amount ?? '0'),
+            unswept_addresses: Number(u?.addresses ?? 0),
+            owed: fmt(asset, t?.merchant_balances ?? '0'),
+            fees: fmt(asset, t ? (BigInt(t.fees) + BigInt(t.network_fees) + BigInt(t.payout_fees)).toString() : '0'),
+          };
+        }),
+      };
+    });
+    return { updated_at: report?.updated_at ?? null, wallets };
   });
 
   // --- merchants

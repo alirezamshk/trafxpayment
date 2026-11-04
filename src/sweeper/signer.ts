@@ -300,3 +300,50 @@ export class ColdStorageJob implements Watcher {
     this.log.info({ chain: signer.chain, asset: asset.id, amount: surplus.toString(), tx: tx.hash }, 'surplus moved to cold wallet');
   }
 }
+
+/**
+ * Publishes each hot wallet's address and balances for the admin panel. The API and worker never
+ * hold the signing keys (and cannot derive the hot-wallet addresses from the deposit xpubs), so the
+ * signer reports them. Read with getWalletReport().
+ */
+export class WalletReportJob implements Watcher {
+  readonly name = 'wallet-report';
+  readonly intervalMs = 60_000;
+
+  constructor(
+    private readonly signers: ChainSigner[],
+    private readonly registry: Registry,
+    private readonly coldWallet: (chain: string) => string | undefined,
+    private readonly log: Logger,
+  ) {}
+
+  async tick(): Promise<void> {
+    const wallets = [];
+    for (const s of this.signers) {
+      const balances: Record<string, string | null> = {};
+      for (const asset of this.registry.assets.filter((a) => a.chain === s.chain && this.registry.chains[a.chain].enabled)) {
+        const v = await s.hotBalance(asset).catch((err: Error) => {
+          this.log.warn({ chain: s.chain, asset: asset.id, err: err.message }, 'hot wallet balance unavailable');
+          return null;
+        });
+        balances[asset.id] = v === null ? null : v.toString();
+      }
+      wallets.push({ chain: s.chain, address: s.hotAddress, cold: this.coldWallet(s.chain) ?? null, balances });
+    }
+    await pool.query(
+      `INSERT INTO system_settings (key, value) VALUES ('hot_wallets', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify({ updated_at: new Date().toISOString(), wallets })],
+    );
+  }
+}
+
+export interface WalletReport {
+  updated_at: string;
+  wallets: { chain: string; address: string; cold: string | null; balances: Record<string, string | null> }[];
+}
+
+export async function getWalletReport(): Promise<WalletReport | null> {
+  const { rows } = await pool.query<{ value: WalletReport }>(`SELECT value FROM system_settings WHERE key = 'hot_wallets'`);
+  return rows[0]?.value ?? null;
+}

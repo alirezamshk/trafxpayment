@@ -754,3 +754,32 @@ describe('platform-wide currency switch', () => {
     expect((await ledger.settings.get(pool, 'USDT_TRC20')).minAmount).toBe(0n);
   });
 });
+
+describe('admin wallets page', () => {
+  it('shows hot wallets reported by the signer, funds waiting to be swept and what is owed', async () => {
+    const { WalletReportJob } = await import('../src/sweeper/signer.js');
+    const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+    // A TRON signer whose hot wallet holds 12 TRX (below the 20 TRX gas minimum) and 50 USDT.
+    const stub = {
+      chain: 'tron', hotAddress: 'THotWallet111111111111111111111111',
+      hotBalance: async (a: { id: string }) => (a.id === 'TRX' ? 12_000_000n : 50_000_000n),
+    } as unknown as import('../src/sweeper/types.js').ChainSigner;
+    await new WalletReportJob([stub], registry, () => undefined, quiet).tick();
+
+    const m = await merchant();
+    const inv = await invoices.create(m.id, { price_amount: '25', price_currency: 'USD', asset: 'USDT_TRC20' });
+    await invoices.recordDeposit({ invoiceId: inv.id, chain: 'tron', asset: 'USDT_TRC20', txHash: 'w1', eventIndex: '0', from: 'X', to: inv.address!, amount: 25_000_000n, confirmed: true });
+
+    const app = await buildServer();
+    await createAdmin(pool, 'w@x.io', 'adminpassword1');
+    const cookie = String((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'w@x.io', password: 'adminpassword1', role: 'admin' } })).headers['set-cookie']).split(';')[0]!;
+    const r = (await app.inject({ method: 'GET', url: '/api/admin/wallets', headers: { cookie } })).json();
+    await app.close();
+
+    const tron = r.wallets.find((w: { chain: string }) => w.chain === 'tron');
+    expect(tron.address).toBe('THotWallet111111111111111111111111');
+    expect(tron.low_gas).toBe(true);
+    const usdt = tron.assets.find((a: { asset: string }) => a.asset === 'USDT_TRC20');
+    expect(usdt).toMatchObject({ hot: '50', unswept: '25', unswept_addresses: 1, owed: '24.5', fees: '0.5' });
+  });
+});

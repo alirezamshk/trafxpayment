@@ -30,6 +30,7 @@ async function start() {
       { id: 'invoices', label: t('a.nav.invoices'), icon: 'invoice' },
       { id: 'unmatched', label: t('a.nav.unmatched'), icon: 'alert' },
       { section: t('a.nav.system') },
+      { id: 'wallets', label: t('a.nav.wallets'), icon: 'wallet' },
       { id: 'assets', label: t('a.nav.assets'), icon: 'coins' },
       { id: 'network', label: t('a.nav.network'), icon: 'globe' },
       { id: 'webhooks', label: t('a.nav.webhooks'), icon: 'bolt' },
@@ -196,6 +197,42 @@ const VIEWS = {
       await api('PUT', '/api/admin/asset-settings', body);
       toast(t('a.as.saved', { a: b.dataset.save }));
     })));
+  },
+
+  async wallets(el, ctx) {
+    ctx.setHeader(t('a.nav.wallets'), esc(t('a.wl.sub')));
+    const r = await api('GET', '/api/admin/wallets');
+    const intro = alertBox('info', esc(t('a.wl.intro')));
+    if (!r.wallets.length) {
+      el.innerHTML = intro + panel({ body: alertBox('warn', esc(t('a.wl.noReport'))) });
+      return;
+    }
+    const n = (v) => (v === null || v === undefined ? '—' : `<span class="num">${esc(fmtAmount(v))}</span>`);
+    el.innerHTML = intro + r.wallets.map((w) => panel({
+      title: `${esc(w.network)}${w.testnet ? ` <span class="badge b-warn">testnet</span>` : ''}`,
+      desc: esc(t('a.wl.hotDesc')),
+      actions: w.explorer ? `<a class="btn sm secondary" href="${esc(w.explorer)}" target="_blank" rel="noopener">${icon('external')}${esc(t('a.wl.explorer'))}</a>` : '',
+      body: `<div class="stack">
+        ${field(esc(t('a.wl.hot')), copyField(w.address))}
+        ${w.low_gas ? alertBox('warn', esc(t('a.wl.lowGas', { a: w.gas_asset, m: w.gas_min }))) : ''}
+        <div class="table-wrap"><table><thead><tr>
+          <th>${esc(t('common.asset'))}</th>
+          <th class="t-end" title="${esc(t('a.wl.hotH'))}">${esc(t('a.wl.inHot'))}</th>
+          <th class="t-end" title="${esc(t('a.wl.unsweptH'))}">${esc(t('a.wl.unswept'))}</th>
+          <th class="t-end" title="${esc(t('a.wl.owedH'))}">${esc(t('a.wl.owed'))}</th>
+          <th class="t-end" title="${esc(t('a.wl.feesH'))}">${esc(t('a.wl.fees'))}</th>
+        </tr></thead><tbody>${w.assets.map((a) => `<tr style="${a.active ? '' : 'opacity:.55'}">
+          <td>${assetLabel(a.asset)}${a.active ? '' : ` <span class="small text-2">(${esc(t('a.wl.off'))})</span>`}</td>
+          <td class="t-end">${n(a.hot)}</td>
+          <td class="t-end">${n(a.unswept)}${a.unswept_addresses ? `<div class="sub small text-2">${esc(t('a.wl.addrs', { n: a.unswept_addresses }))}</div>` : ''}</td>
+          <td class="t-end">${n(a.owed)}</td>
+          <td class="t-end">${n(a.fees)}</td>
+        </tr>`).join('')}</tbody></table></div>
+        ${w.cold
+          ? field(esc(t('a.wl.cold')), copyField(w.cold), esc(t('a.wl.coldOn')))
+          : `<div class="small text-2">${esc(t('a.wl.coldOff', { k: w.chain === 'tron' ? 'COLD_WALLET_TRON' : w.chain === 'ton' ? 'COLD_WALLET_TON' : 'COLD_WALLET_EVM' })).replace('.env.signer', '<bdi class="mono">.env.signer</bdi>')}</div>`}
+      </div>`,
+    })).join('') + `<div class="small text-2">${esc(t('a.wl.updated', { t: fmtDate(r.updated_at) }))}</div>`;
   },
 
   async network(el, ctx) {
