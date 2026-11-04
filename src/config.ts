@@ -37,7 +37,10 @@ const schema = z.object({
   LATE_PAYMENT_WINDOW_HOURS: z.coerce.number().nonnegative().default(24),
   UNDERPAY_TOLERANCE_PERCENT: z.coerce.number().min(0).max(100).default(0),
   // Pool addresses (invoices without customer_id) are reused after this cool-down.
-  ADDRESS_POOL_COOLDOWN_HOURS: z.coerce.number().nonnegative().default(48),
+  // Rest period before a pool address is reused: after an unpaid/expired invoice (late payments are
+  // still credited to it for LATE_PAYMENT_WINDOW_HOURS) and after a paid one.
+  ADDRESS_POOL_COOLDOWN_HOURS: z.coerce.number().nonnegative().default(24),
+  ADDRESS_POOL_PAID_COOLDOWN_HOURS: z.coerce.number().nonnegative().default(6),
   ADDRESS_POOL_MAX: z.coerce.number().int().positive().default(1000),
   // Permanent customer addresses stay monitored this long after their last invoice.
   CUSTOMER_ADDRESS_WATCH_DAYS: z.coerce.number().nonnegative().default(30),

@@ -125,6 +125,7 @@ export interface InvoiceServiceDeps {
   lateWindowHours?: number;
   publicBaseUrl?: string;
   poolCooldownHours?: number;
+  poolPaidCooldownHours?: number;
   poolMax?: number;
   customerWatchDays?: number;
 }
@@ -143,6 +144,7 @@ export class InvoiceService {
   readonly lateWindowHours: number;
   readonly publicBaseUrl: string;
   readonly poolCooldownHours: number;
+  readonly poolPaidCooldownHours: number;
   readonly poolMax: number;
   readonly customerWatchDays: number;
 
@@ -152,6 +154,7 @@ export class InvoiceService {
     this.lateWindowHours = deps.lateWindowHours ?? config.LATE_PAYMENT_WINDOW_HOURS;
     this.publicBaseUrl = (deps.publicBaseUrl ?? config.PUBLIC_BASE_URL).replace(/\/$/, '');
     this.poolCooldownHours = deps.poolCooldownHours ?? config.ADDRESS_POOL_COOLDOWN_HOURS;
+    this.poolPaidCooldownHours = deps.poolPaidCooldownHours ?? config.ADDRESS_POOL_PAID_COOLDOWN_HOURS;
     this.poolMax = deps.poolMax ?? config.ADDRESS_POOL_MAX;
     this.customerWatchDays = deps.customerWatchDays ?? config.CUSTOMER_ADDRESS_WATCH_DAYS;
   }
@@ -382,13 +385,23 @@ export class InvoiceService {
         await this.releaseBusyCustomerInvoice(db, row.current_invoice_id);
       }
     } else {
+      // Free pool address = no open invoice and its rest period is over: short after a paid invoice
+      // (a second payment is unlikely), longer after an unpaid one (the customer may still pay late).
+      // Among free addresses, prefer the one already holding the most unswept funds of this asset, so
+      // money piles up on few addresses and reaches the sweep threshold with fewer, cheaper sweeps.
       ({ rows: [row] } = await db.query<Row>(
-        `SELECT id, address, derivation_index, current_invoice_id FROM deposit_addresses
-         WHERE merchant_id = $1 AND family = $2 AND customer_id IS NULL AND current_invoice_id IS NULL
-           AND (released_at IS NULL OR released_at < now() - make_interval(hours => $3))
-         ORDER BY released_at NULLS FIRST, id
-         LIMIT 1 FOR UPDATE SKIP LOCKED`,
-        [invoice.merchant_id, family, this.poolCooldownHours],
+        `SELECT da.id, da.address, da.derivation_index, da.current_invoice_id
+         FROM deposit_addresses da
+         LEFT JOIN invoices li ON li.id = da.last_invoice_id
+         WHERE da.merchant_id = $1 AND da.family = $2 AND da.customer_id IS NULL AND da.current_invoice_id IS NULL
+           AND (da.released_at IS NULL OR da.released_at < now()
+                - (CASE WHEN li.status = 'paid' THEN $4::float8 ELSE $3::float8 END) * interval '1 hour')
+         ORDER BY (SELECT COALESCE(SUM(d.amount), 0) FROM deposits d
+                   WHERE lower(d.to_address) = lower(da.address) AND d.asset = $5
+                     AND d.status = 'confirmed' AND d.swept_at IS NULL) DESC,
+                  da.released_at NULLS FIRST, da.id
+         LIMIT 1 FOR UPDATE OF da SKIP LOCKED`,
+        [invoice.merchant_id, family, this.poolCooldownHours, this.poolPaidCooldownHours, invoice.asset],
       ));
       if (!row) {
         const { rows: c } = await db.query<{ n: string }>(

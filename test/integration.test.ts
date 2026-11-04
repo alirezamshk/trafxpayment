@@ -783,3 +783,35 @@ describe('admin wallets page', () => {
     expect(usdt).toMatchObject({ hot: '50', unswept: '25', unswept_addresses: 1, owed: '24.5', fees: '0.5' });
   });
 });
+
+describe('address pool concentration', () => {
+  it('reuses the free address holding the most unswept funds; paid invoices rest 6h, unpaid 24h', async () => {
+    const m = await merchant();
+    const mk = () => invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' });
+    const pay = (inv: { id: string; address: string | null }, amount: bigint, tx: string) =>
+      invoices.recordDeposit({ invoiceId: inv.id, chain: 'tron', asset: 'USDT_TRC20', txHash: tx, eventIndex: '0', from: 'X', to: inv.address!, amount, confirmed: true });
+    const x = await mk();
+    const y = await mk();
+    const z = await mk();
+    await pay(x, 5_000_000n, 'cx1');
+    await pay(z, 5_000_000n, 'cz1');
+    await invoices.cancel(y.id, m.id); // unpaid
+    // x holds 5 + 3 USDT unswept (an extra late payment), z holds 5.
+    await pool.query(`INSERT INTO deposits (invoice_id, chain, asset, tx_hash, to_address, amount, status, confirmations, confirmed_at)
+                      VALUES ($1, 'tron', 'USDT_TRC20', 'cx2', $2, 3000000, 'confirmed', 20, now())`, [x.id, x.address]);
+
+    // Inside the paid rest period nothing is reused.
+    expect([x.address, y.address, z.address]).not.toContain((await mk()).address);
+
+    // 7 hours later: paid addresses are free again, the unpaid one still rests.
+    await pool.query(`UPDATE deposit_addresses SET released_at = now() - interval '7 hours' WHERE address = ANY($1)`, [[x.address, y.address, z.address]]);
+    expect((await mk()).address).toBe(x.address); // most funds first
+    expect((await mk()).address).toBe(z.address);
+    const next = await mk();
+    expect([x.address, y.address, z.address]).not.toContain(next.address);
+
+    // After 24 hours the unpaid invoice's address comes back too.
+    await pool.query(`UPDATE deposit_addresses SET released_at = now() - interval '25 hours' WHERE address = $1`, [y.address]);
+    expect((await mk()).address).toBe(y.address);
+  });
+});
