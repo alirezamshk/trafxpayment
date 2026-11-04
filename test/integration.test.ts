@@ -737,3 +737,20 @@ describe('TLS certificates (API_TLS=acme-dns)', () => {
     expect((await getCertificate(pool))?.domain).toBe('pay.example.com');
   }, 60_000);
 });
+
+describe('platform-wide currency switch', () => {
+  it('hides a disabled currency from every merchant and rejects new invoices in it', async () => {
+    const m = await merchant();
+    expect((await invoices.merchantAssets(m.id)).map((a) => a.id)).toContain('USDT_TRC20');
+    await ledger.settings.setEnabled(pool, 'USDT_TRC20', false);
+    expect((await invoices.merchantAssets(m.id)).map((a) => a.id)).not.toContain('USDT_TRC20');
+    expect((await invoices.merchantAssets(m.id)).map((a) => a.id)).toContain('TRX');
+    await expect(invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_TRC20' })).rejects.toThrow(/not enabled/);
+    const row = (await ledger.settings.view(pool, ['USDT_TRC20', 'TRX']));
+    expect(row.map((r) => r.enabled)).toEqual([false, true]);
+    // Switching it back on keeps the other settings (set earlier in reset()).
+    await ledger.settings.setEnabled(pool, 'USDT_TRC20', true);
+    expect((await invoices.merchantAssets(m.id)).map((a) => a.id)).toContain('USDT_TRC20');
+    expect((await ledger.settings.get(pool, 'USDT_TRC20')).minAmount).toBe(0n);
+  });
+});

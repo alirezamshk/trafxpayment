@@ -180,9 +180,16 @@ const VIEWS = {
     ctx.setHeader(t('a.nav.assets'), esc(t('a.as.sub')));
     const r = await api('GET', '/api/admin/asset-settings');
     const F = ['min_amount', 'deposit_fee', 'sweep_threshold', 'payout_fee', 'hot_max'];
-    el.innerHTML = panel({ flush: true, body: `<div class="table-wrap"><table><thead><tr><th>${esc(t('common.asset'))}</th>${F.map((k) => `<th title="${esc(t('a.as.' + k + 'H'))}">${esc(t('a.as.' + k))}<span class="sub" style="font-weight:400;white-space:normal;max-width:150px">${esc(t('a.as.' + k + 'H'))}</span></th>`).join('')}<th></th></tr></thead>
-      <tbody>${r.data.map((a) => `<tr><td>${assetLabel(a.asset)}</td>${F.map((k) => `<td><input id="as-${esc(a.asset)}-${k}" class="ltr" style="min-width:96px;max-width:130px" inputmode="decimal" data-a="${esc(a.asset)}" data-k="${k}" value="${esc(a[k])}" aria-label="${esc(a.asset)} ${esc(t('a.as.' + k))}"></td>`).join('')}
+    el.innerHTML = panel({ flush: true, body: `<div class="table-wrap"><table><thead><tr><th>${esc(t('a.as.enabled'))}</th><th>${esc(t('common.asset'))}</th>${F.map((k) => `<th title="${esc(t('a.as.' + k + 'H'))}">${esc(t('a.as.' + k))}<span class="sub" style="font-weight:400;white-space:normal;max-width:150px">${esc(t('a.as.' + k + 'H'))}</span></th>`).join('')}<th></th></tr></thead>
+      <tbody>${r.data.map((a) => `<tr style="${a.enabled ? '' : 'opacity:.55'}"><td><input type="checkbox" data-on="${esc(a.asset)}" ${a.enabled ? 'checked' : ''} aria-label="${esc(t('a.as.enabled'))} ${esc(a.asset)}" title="${esc(t('a.as.enabledH'))}"></td><td>${assetLabel(a.asset)}</td>${F.map((k) => `<td><input id="as-${esc(a.asset)}-${k}" class="ltr" style="min-width:96px;max-width:130px" inputmode="decimal" data-a="${esc(a.asset)}" data-k="${k}" value="${esc(a[k])}" aria-label="${esc(a.asset)} ${esc(t('a.as.' + k))}"></td>`).join('')}
         <td><button class="btn sm" data-save="${esc(a.asset)}">${esc(t('common.save'))}</button></td></tr>`).join('')}</tbody></table></div>` });
+    $$('[data-on]', el).forEach((c) => c.addEventListener('change', async () => {
+      try {
+        await api('PUT', '/api/admin/asset-settings/enabled', { asset: c.dataset.on, enabled: c.checked });
+        toast(t(c.checked ? 'a.as.on' : 'a.as.off', { a: c.dataset.on }));
+        c.closest('tr').style.opacity = c.checked ? '' : '.55';
+      } catch (e) { c.checked = !c.checked; toast(errText(e), 'err'); }
+    }));
     $$('[data-save]', el).forEach((b) => b.addEventListener('click', () => busy(b, async () => {
       const body = { asset: b.dataset.save };
       $$(`[data-a="${b.dataset.save}"]`, el).forEach((i) => (body[i.dataset.k] = i.value.trim()));

@@ -89,9 +89,25 @@ export class AssetSettingsService {
     );
   }
 
+  /** Currencies switched off platform-wide in the admin panel. */
+  async disabledAssets(db: Queryable): Promise<Set<string>> {
+    const { rows } = await db.query<{ asset: string }>('SELECT asset FROM asset_settings WHERE disabled');
+    return new Set(rows.map((r) => r.asset));
+  }
+
+  async setEnabled(db: Queryable, asset: string, enabled: boolean): Promise<void> {
+    const d = this.defaults(asset);
+    await db.query(
+      `INSERT INTO asset_settings (asset, sweep_threshold, payout_fee, disabled) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (asset) DO UPDATE SET disabled = EXCLUDED.disabled, updated_at = now()`,
+      [asset, d.sweepThreshold.toString(), d.payoutFee.toString(), !enabled],
+    );
+  }
+
   /** Human-readable values for the panels. */
   async view(db: Queryable, assets: string[]) {
     const out = [];
+    const disabled = await this.disabledAssets(db);
     for (const asset of assets) {
       const def = findAsset(this.registry, asset)!;
       const s = await this.get(db, asset);
@@ -103,6 +119,7 @@ export class AssetSettingsService {
         min_amount: f(s.minAmount),
         deposit_fee: f(s.depositFee),
         hot_max: f(s.hotMax),
+        enabled: !disabled.has(asset),
       });
     }
     return out;

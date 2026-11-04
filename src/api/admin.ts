@@ -91,6 +91,17 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get('/asset-settings', async () => ({
     data: await ledger.settings.view(pool, invoices.availableAssets().map((a) => a.id)),
   }));
+  // Platform-wide on/off per currency (e.g. switch off USDT-TRC20 when its network cost is too high).
+  app.put('/asset-settings/enabled', async (req) => {
+    const b = parse(z.object({ asset: z.string(), enabled: z.boolean() }), req.body);
+    const asset = invoices.asset(b.asset);
+    if (!b.enabled) {
+      const others = (await invoices.activeAssets()).filter((a) => a.id !== asset.id);
+      if (!others.length) throw httpError(400, 'no_assets', 'At least one currency must stay enabled');
+    }
+    await ledger.settings.setEnabled(pool, asset.id, b.enabled);
+    return { ok: true };
+  });
   app.put('/asset-settings', async (req) => {
     const dec = z.string().trim().regex(/^\d+(\.\d+)?$/);
     const b = parse(

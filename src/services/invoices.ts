@@ -705,7 +705,7 @@ export class InvoiceService {
   async merchantAssets(merchantId: string) {
     const { rows } = await pool.query<{ allowed_assets: string[] | null }>('SELECT allowed_assets FROM merchants WHERE id = $1', [merchantId]);
     const allowed = rows[0]?.allowed_assets;
-    const all = this.availableAssets();
+    const all = await this.activeAssets();
     return allowed ? all.filter((a) => allowed.includes(a.id)) : all;
   }
 
@@ -713,6 +713,12 @@ export class InvoiceService {
     if (!(await this.merchantAssets(merchantId)).some((a) => a.id === asset.id)) {
       throw new InvoiceError(`${asset.id} is not enabled for this merchant account`, 400, 'asset_not_allowed');
     }
+  }
+
+  /** Supported currencies minus those the admin switched off platform-wide. */
+  async activeAssets() {
+    const disabled = await this.deps.ledger.settings.disabledAssets(pool);
+    return this.availableAssets().filter((a) => !disabled.has(a.id));
   }
 
   availableAssets() {

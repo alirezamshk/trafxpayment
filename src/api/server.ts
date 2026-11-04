@@ -97,7 +97,7 @@ export async function buildServer(opts: { tls?: https.ServerOptions } = {}) {
   });
 
   // ---- public
-  app.get('/v1/assets', async () => ({ data: invoices.availableAssets() }));
+  app.get('/v1/assets', async () => ({ data: await invoices.activeAssets() }));
 
   app.get<{ Params: { id: string } }>('/api/public/invoices/:id', async (req, reply) => {
     const inv = await invoices.get(pool, req.params.id);
