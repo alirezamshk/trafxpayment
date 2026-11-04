@@ -152,6 +152,7 @@ export class TonWatcher implements Watcher {
   readonly name = 'ton';
   readonly intervalMs = config.TON_POLL_INTERVAL_MS;
   private jettonWallet?: string;
+  private jettonRetryAt = 0;
 
   constructor(
     private readonly chain: ChainDef,
@@ -166,11 +167,21 @@ export class TonWatcher implements Watcher {
     const ton = this.assets.find((a) => !a.contract);
     const usdt = this.assets.find((a) => a.contract);
     if (ton) await this.scanAccount(Address.parse(this.treasury).toRawString(), 'ton:treasury', (tx) => this.handleNative(tx, ton));
-    if (usdt) {
-      if (!this.jettonWallet) {
+    if (usdt && !this.jettonWallet && Date.now() >= this.jettonRetryAt) {
+      try {
         this.jettonWallet = await this.api.jettonWalletAddress(usdt.contract!, this.treasury);
         this.log.info({ jettonWallet: this.jettonWallet }, 'resolved treasury USDT jetton wallet');
+      } catch (err) {
+        // Typically TON_USDT_MASTER points to a contract that does not exist on this network (e.g. the
+        // mainnet USDT on testnet). Native TON keeps working; retry hourly instead of failing every tick.
+        this.jettonRetryAt = Date.now() + 3_600_000;
+        this.log.warn(
+          { err: (err as Error).message, master: usdt.contract },
+          'USDT on TON disabled for now: jetton master not found on this network (check TON_USDT_MASTER); retrying in 1 hour',
+        );
       }
+    }
+    if (usdt && this.jettonWallet) {
       await this.scanAccount(this.jettonWallet, 'ton:jetton:usdt', (tx) => this.handleJetton(tx, usdt));
     }
   }
