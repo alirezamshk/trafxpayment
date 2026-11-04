@@ -215,7 +215,8 @@ echo
 echo "How should visitors reach the gateway?"
 echo "  1) Behind Cloudflare (orange cloud, SSL/TLS mode \"Flexible\"): Cloudflare serves HTTPS,"
 echo "     this server answers plain HTTP on port 80 (or another free port if 80 is taken)"
-echo "  2) Own Let's Encrypt certificate on ports 80 + 443 (no Cloudflare proxy: grey cloud)"
+echo "  2) Own Let's Encrypt certificate on ports 80 + 443 — with or without the Cloudflare proxy"
+echo "     (orange cloud with SSL/TLS mode \"Full (strict)\" = encrypted all the way; recommended)"
 echo "  3) Behind a reverse proxy that already runs on this server (nginx, Caddy, Traefik,"
 echo "     Nginx Proxy Manager...) — it keeps 80/443 and forwards $DOMAIN to the gateway"
 echo "  4) Direct HTTPS on another port without the Cloudflare proxy (grey cloud): the gateway gets"
@@ -244,6 +245,12 @@ case "$WEB_MODE" in
     fi
     while [ -z "$ACME_EMAIL" ]; do ask ACME_EMAIL "Email for the SSL certificate (Let's Encrypt)"; done
     PUBLIC_URL="https://$DOMAIN"
+    if yes_no "Is the DNS record of $DOMAIN proxied by Cloudflare (orange cloud)?" y; then
+      # Only Cloudflare may then tell us the visitor's IP (X-Forwarded-For): Cloudflare -> caddy -> api.
+      TRUSTED_PROXIES="$CLOUDFLARE_IPS"; HOPS=2
+      echo "In Cloudflare: SSL/TLS mode \"Full (strict)\". Until the first certificate is issued, turn OFF"
+      echo "SSL/TLS → Edge Certificates → \"Always Use HTTPS\" — Let's Encrypt validates over plain HTTP on port 80."
+    fi
     ;;
   1)
     # Cloudflare serves HTTPS to visitors and connects to this server with plain HTTP (port 80,
@@ -462,6 +469,9 @@ FORWARD_NOTE=""
 if [ "$WEB_MODE" = 1 ]; then
   FORWARD_NOTE="
   Cloudflare      : A record of $DOMAIN Proxied (orange cloud), SSL/TLS mode \"Flexible\""
+elif [ "$WEB_MODE" = 2 ] && [ "$HOPS" = 2 ]; then
+  FORWARD_NOTE="
+  Cloudflare      : orange cloud, SSL/TLS \"Full (strict)\"; certificate: docker compose logs caddy"
 elif [ "$WEB_MODE" = 4 ]; then
   FORWARD_NOTE="
   Certificate     : requested by the worker within a minute (admin panel → Proxy & connectivity).
