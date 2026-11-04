@@ -162,12 +162,26 @@ fi
 
 # ---------------------------------------------------------------- packages
 say "Installing system packages"
-if ! no_proxy_env apt-get update -qq; then
-  [ -n "$PROXY" ] || die "apt-get update failed"
-  warn "apt-get update failed directly — retrying through the proxy"
-  use_proxy "$PROXY"; apt-get update -qq
+# Only touch apt when something is missing: on many servers (e.g. in Iran) one of the configured
+# repositories — often download.docker.com — answers 403 and makes `apt-get update` fail.
+MISSING=""
+for pair in git:git curl:curl openssl:openssl cron:cron ss:iproute2; do
+  command -v "${pair%%:*}" >/dev/null 2>&1 || MISSING="$MISSING ${pair#*:}"
+done
+if [ -z "$MISSING" ]; then
+  echo "All needed packages are already installed."
+else
+  if ! no_proxy_env apt-get update -qq; then
+    if [ -n "$PROXY" ]; then
+      warn "apt-get update failed directly — retrying through the proxy"
+      use_proxy "$PROXY"; apt-get update -qq || warn "Some apt repositories are unreachable; continuing with the others"
+    else
+      warn "Some apt repositories are unreachable (see above); continuing with the others"
+    fi
+  fi
+  # shellcheck disable=SC2086
+  apt-get install -y -qq $MISSING >/dev/null || die "Could not install:$MISSING — install them by hand (apt-get install$MISSING) and re-run"
 fi
-apt-get install -y -qq git curl openssl cron iproute2 >/dev/null
 
 if ! command -v docker >/dev/null 2>&1; then
   say "Installing Docker"
