@@ -93,6 +93,47 @@ CLOUDFLARE_IPS="173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 14
 
 reachable() { curl -sf -o /dev/null --connect-timeout 8 --max-time 20 "$@"; }
 
+GHCR="ghcr.io/alirezamshk"
+
+# Preferred: download the ready-made images GitHub publishes (nothing is built on this server).
+# Returns non-zero when ghcr.io cannot be used, so the caller falls back to building locally.
+use_published_images() {
+  local token user
+  say "Downloading the ready-made images from GitHub ($GHCR)"
+  if ! timeout 300 docker pull -q "$GHCR/trafxpayment:stable" >/dev/null 2>&1; then
+    warn "Could not download $GHCR/trafxpayment:stable."
+    warn "If the GitHub package is private, log in with a GitHub token that has read:packages"
+    warn "(github.com → Settings → Developer settings → Personal access tokens → read:packages)."
+    ask user "GitHub username (empty = build on this server instead)" ""
+    [ -n "$user" ] || return 1
+    read -r -s -p "GitHub token: " token; echo
+    printf '%s' "$token" | docker login ghcr.io -u "$user" --password-stdin >/dev/null || { warn "GitHub login failed"; return 1; }
+    timeout 300 docker pull -q "$GHCR/trafxpayment:stable" >/dev/null 2>&1 || return 1
+  fi
+  timeout 300 docker pull -q "$GHCR/trafxpayment-postgres:16-alpine" >/dev/null 2>&1 || return 1
+  timeout 300 docker pull -q "$GHCR/trafxpayment-caddy:2-alpine" >/dev/null 2>&1 || return 1
+  set_env APP_IMAGE "$GHCR/trafxpayment:stable" .env
+  set_env DB_IMAGE "$GHCR/trafxpayment-postgres:16-alpine" .env
+  set_env CADDY_IMAGE "$GHCR/trafxpayment-caddy:2-alpine" .env
+  echo "  OK — using the published images."
+}
+
+# Fallback: build here; base images and npm packages come from whatever source is reachable.
+build_locally() {
+  ensure_build_sources
+  local hub; hub="$(get_env DOCKERHUB)"
+  set_env APP_IMAGE trafxpayment-app .env
+  set_env DB_IMAGE "$hub/library/postgres:16-alpine" .env
+  set_env CADDY_IMAGE "$hub/library/caddy:2-alpine" .env
+  say "Building the application image on this server (takes a few minutes)"
+  docker compose build
+}
+
+get_images() {
+  if [ "$(get_env APP_IMAGE)" = trafxpayment-app ]; then build_locally; return; fi
+  use_published_images || { warn "Falling back to building on this server."; build_locally; }
+}
+
 ensure_build_sources() {
   local current m image="node:22-alpine"
   say "Checking where to download Docker images and npm packages from"
@@ -133,7 +174,8 @@ if [ -f .env ] && [ -z "$(get_env EVM_XPUB)" ]; then
 elif [ -f .env ]; then
   say "Existing installation found (.env present) — rebuilding and restarting only (keys are kept)"
   grep -q '^COMPOSE_PROFILES=' .env || set_env COMPOSE_PROFILES caddy .env   # installs from before ports were configurable
-  docker compose up -d --build --remove-orphans
+  get_images
+  docker compose up -d --remove-orphans
   install_backup_cron
   docker compose ps
   echo
@@ -341,6 +383,19 @@ if [ "$WEB_MODE" != 3 ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- leftover database
+# A database volume from an earlier install still has that install's password; the new .env would
+# not match it and the migration fails. It also holds the old merchants, invoices and balances.
+PROJECT="$(basename "$APP_DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+if docker volume inspect "${PROJECT}_pgdata" >/dev/null 2>&1; then
+  warn "A database from an earlier installation exists (Docker volume ${PROJECT}_pgdata)."
+  warn "A fresh install needs a fresh database; the old one (merchants, invoices, balances) is deleted."
+  read -r -p "Type DELETE to remove it and continue: " answer
+  [ "$answer" = DELETE ] || die "Cancelled. Keep it by restoring the old .env / .env.signer instead of reinstalling."
+  docker compose --profile caddy down --remove-orphans >/dev/null 2>&1 || true
+  docker volume rm "${PROJECT}_pgdata" >/dev/null
+fi
+
 # ---------------------------------------------------------------- .env
 say "Writing .env"
 DB_PASSWORD="$(openssl rand -hex 24)"
@@ -400,11 +455,9 @@ else
 fi
 
 BUILD_PROXY_ARG=""; [ -n "${PROXY:-}" ] && BUILD_PROXY_ARG="-x $PROXY"
-ensure_build_sources
 
-# ---------------------------------------------------------------- build + keys
-say "Building the application images (takes a few minutes)"
-docker compose build
+# ---------------------------------------------------------------- images + keys
+get_images
 
 if [ -n "$PROXY" ]; then
   say "Checking that the services can reach the blockchain APIs through the proxy"

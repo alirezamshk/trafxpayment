@@ -1,0 +1,59 @@
+# Builds the gateway image and publishes everything the servers need to GitHub's registry (ghcr.io),
+# so installs never build on the server or touch Docker Hub / npm (both blocked or slow from Iran).
+name: images
+
+on:
+  push:
+    branches: [main, claude/lucid-hamilton-aez7rd]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/alirezamshk
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run the tests
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=trafxpayment_test postgres:16-alpine
+          npm ci
+          for i in $(seq 1 30); do docker exec pg pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+          npx tsc --noEmit
+          TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/trafxpayment_test npx vitest run
+
+      - name: Build and push the app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/trafxpayment:stable
+            ${{ env.REGISTRY }}/trafxpayment:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Copy postgres and caddy to ghcr.io
+        run: |
+          docker buildx imagetools create --tag $REGISTRY/trafxpayment-postgres:16-alpine docker.io/library/postgres:16-alpine
+          docker buildx imagetools create --tag $REGISTRY/trafxpayment-caddy:2-alpine docker.io/library/caddy:2-alpine
