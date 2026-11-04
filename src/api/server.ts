@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import https from 'node:https';
 import { dirname, join } from 'node:path';
@@ -116,18 +117,32 @@ export async function buildServer(opts: { tls?: https.ServerOptions } = {}) {
   await app.register(adminRoutes, { prefix: '/api/admin' });
 
   // ---- pages
+  // Asset URLs carry a content hash (?v=…) so browsers and Cloudflare fetch fresh files after every update;
+  // HTML itself is never cached.
+  const assetFiles: Record<string, string> = { 'app.css': 'text/css', 'app.js': 'application/javascript', 'i18n.js': 'application/javascript' };
+  const hashAssets = () => createHash('sha256').update(Object.keys(assetFiles).map(page).join('\0')).digest('hex').slice(0, 12);
+  let prodVersion: string | undefined;
+  const assetVersion = () => (config.NODE_ENV === 'production' ? (prodVersion ??= hashAssets()) : hashAssets());
+  const render = (file: string) => {
+    const v = assetVersion();
+    return page(file).replace(/\/assets\/(app\.css|app\.js|i18n\.js)(?=["'])/g, (m) => `${m}?v=${v}`);
+  };
   const pages: Record<string, string> = { '/pay/:id': 'pay.html', '/panel': 'panel.html', '/admin': 'admin.html', '/': 'index.html' };
   const cache = new Map<string, string>();
   for (const [route, file] of Object.entries(pages)) {
     app.get(route, async (_req, reply) => {
-      const html = config.NODE_ENV === 'production' ? (cache.get(file) ?? cache.set(file, page(file)).get(file)!) : page(file);
-      return reply.type('text/html; charset=utf-8').send(html);
+      const html = config.NODE_ENV === 'production' ? (cache.get(file) ?? cache.set(file, render(file)).get(file)!) : render(file);
+      return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(html);
     });
   }
   app.get('/favicon.ico', async (_req, reply) => reply.code(204).send());
-  app.get('/assets/app.css', async (_req, reply) => reply.type('text/css').send(page('app.css')));
-  app.get('/assets/app.js', async (_req, reply) => reply.type('application/javascript').send(page('app.js')));
-  app.get('/assets/i18n.js', async (_req, reply) => reply.type('application/javascript').send(page('i18n.js')));
+  for (const [file, type] of Object.entries(assetFiles)) {
+    app.get<{ Querystring: { v?: string } }>(`/assets/${file}`, async (req, reply) => {
+      const versioned = !!req.query.v && req.query.v === assetVersion();
+      reply.header('cache-control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache');
+      return reply.type(type).send(page(file));
+    });
+  }
 
   return app;
 }
