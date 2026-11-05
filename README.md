@@ -81,7 +81,7 @@ sudo bash install.sh
 | POST | `/v1/invoices/:id/cancel` | لغو (فقط بدون پرداخت) |
 | GET | `/v1/balances` | موجودی قابل تسویه |
 | GET/POST | `/v1/payouts` | تاریخچه / درخواست تسویه `{asset}` |
-| GET | `/v1/assets` | ارزهای فعال (عمومی) |
+| GET | `/v1/currencies` | ارزهای فعال برای حساب شما |
 
 وضعیت فاکتور: `pending` → `confirming` → `paid`؛ همچنین `partially_paid`، `expired`، `cancelled`.
 پاسخ شامل `payment_url` است؛ مشتری را به آن هدایت کنید.
