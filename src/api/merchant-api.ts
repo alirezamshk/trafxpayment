@@ -20,6 +20,10 @@ export const createInvoiceSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   expires_in_minutes: z.number().int().optional(),
   customer_id: z.string().max(128).optional(),
+  customer_name: z.string().max(128).optional(),
+  customer_email: z.string().max(254).optional(),
+  customer_phone: z.string().max(24).optional(),
+  customer_account: z.string().max(128).optional(),
   fee_paid_by: z.enum(['merchant', 'customer']).optional(),
 });
 

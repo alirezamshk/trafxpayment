@@ -61,6 +61,10 @@ Authorization: Bearer txp_XXXXXXXX
 | `asset` | string | ارز پرداخت، مثل `USDT_BEP20`. اگر نفرستید مشتری در صفحهٔ پرداخت انتخاب می‌کند |
 | `order_id` | string (حداکثر ۱۲۸) | شناسهٔ سفارش در سیستم شما |
 | `customer_id` | string (حداکثر ۱۲۸) | شناسهٔ کاربر در سیستم شما؛ برای آدرس واریز دائمی هر کاربر |
+| `customer_name` | string (حداکثر ۱۲۸) | نام مشتری (اختیاری؛ برای ثبت و نمایش در پنل شما) |
+| `customer_email` | string | ایمیل مشتری (اختیاری) |
+| `customer_phone` | string (حداکثر ۲۴) | تلفن مشتری (اختیاری)، مثل `+989121234567` |
+| `customer_account` | string (حداکثر ۱۲۸) | اکانت یا نام کاربری مشتری در سیستم شما (اختیاری) |
 | `description` | string (حداکثر ۵۰۰) | توضیح برای نمایش در صفحهٔ پرداخت |
 | `success_url` / `cancel_url` | URL | مقصد بازگشت مشتری |
 | `metadata` | object | هر داده‌ای که می‌خواهید در Webhook برگردد |
@@ -76,8 +80,13 @@ Authorization: Bearer txp_XXXXXXXX
 ```json
 {
   "id": "6f1c0c1e-....",
-  "order_id": "1001",
+  "invoice_number": 1001,
+  "order_id": "ORD-1",
   "customer_id": null,
+  "customer_name": "Ali Rezaei",
+  "customer_email": "ali@example.com",
+  "customer_phone": "+989121234567",
+  "customer_account": "ali42",
   "description": null,
   "status": "pending",
   "price_amount": "25",
@@ -105,6 +114,8 @@ Authorization: Bearer txp_XXXXXXXX
   "deposits": []
 }
 ```
+
+`invoice_number` شمارهٔ ترتیبی فاکتور برای هر پذیرنده است و خودکار داده می‌شود (`order_id` شناسهٔ سفارش خود شماست). مشخصات مشتری فقط برای ثبت‌اند و در صفحهٔ پرداخت نمایش داده نمی‌شوند.
 
 `asset`، `address`، `pay_amount` تا وقتی مشتری ارز را انتخاب نکرده ممکن است `null` باشند.
 `memo` فقط برای TON است (کامنت واریز باید دقیقاً همین باشد).

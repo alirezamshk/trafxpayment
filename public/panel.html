@@ -47,7 +47,7 @@ const bindNewLink = () => { $('#hdr-new').onclick = newInvoiceDialog; };
 const INVOICE_HEAD = () => [t('inv.price'), t('inv.payAsset'), t('inv.received'), t('common.status'), t('common.date'), ''];
 function invoiceRows(list) {
   return list.map((i) => [
-    `<span class="num strong">${esc(fmtAmount(i.price_amount, 2))}</span> <span class="muted small">${esc(i.price_currency)}</span><span class="sub">${esc(i.order_id ? '#' + i.order_id : short(i.id, 4))}</span>`,
+    `<span class="num strong">${esc(fmtAmount(i.price_amount, 2))}</span> <span class="muted small">${esc(i.price_currency)}</span><span class="sub">${esc('#' + i.invoice_number)}${i.order_id ? ' · ' + esc(i.order_id) : ''}${i.customer_name ? ' · ' + esc(i.customer_name) : ''}</span>`,
     i.asset ? `${assetLabel(i.asset)}<span class="sub"><span class="num">${esc(fmtAmount(i.pay_amount))}</span></span>` : `<span class="muted">${esc(t('inv.notChosen'))}</span>`,
     num(i.amount_received),
     badge(i.status) + (i.is_late ? ` <span class="badge plain b-warn">${esc(t('st.late'))}</span>` : ''),
@@ -64,7 +64,10 @@ async function invoiceDetail(id) {
     [`${t('common.asset')} / ${t('common.network')}`, i.asset ? `${assetLabel(i.asset)} · ${esc(NETWORK[i.network] || i.network)}` : '—'],
     [t('inv.payable'), num(i.pay_amount)], [t('inv.received'), num(i.amount_received)],
     [t('inv.gwFee'), num(i.fee_amount)], [t('inv.netFee'), `${num(i.network_fee)} <span class="muted small">${i.fee_paid_by === 'customer' ? esc(t('inv.byCustomer')) : ''}</span>`],
-    [t('inv.net'), `<b>${num(i.net_amount)}</b>`], [t('inv.orderId'), esc(i.order_id || '—')], [t('inv.customerId'), esc(i.customer_id || '—')],
+    [t('inv.net'), `<b>${num(i.net_amount)}</b>`], [t('inv.number'), `<b>#${esc(i.invoice_number)}</b>`], [t('inv.orderId'), esc(i.order_id || '—')],
+    [t('inv.customerName'), esc(i.customer_name || '—')], [t('inv.customerPhone'), i.customer_phone ? `<span class="ltr">${esc(i.customer_phone)}</span>` : '—'],
+    [t('inv.customerEmail'), i.customer_email ? `<span class="ltr">${esc(i.customer_email)}</span>` : '—'], [t('inv.customerAccount'), esc(i.customer_account || '—')],
+    [t('inv.customerId'), esc(i.customer_id || '—')],
     [t('common.address'), i.address ? `<span class="mono small" style="word-break:break-all">${esc(i.address)}</span>` : '—'],
     [t('inv.created'), fmtDate(i.created_at)], [t('inv.paidAt'), fmtDate(i.paid_at)],
   ];
@@ -91,11 +94,17 @@ async function newInvoiceDialog() {
       ${field(t('inv.payAsset'), `<select id="ni-asset" name="asset"><option value="">${esc(t('inv.chooseByCustomer'))}</option>${assetOptions()}</select>`)}
       ${field(t('inv.desc'), `<input id="ni-desc" name="description" placeholder="${esc(t('inv.descPh'))}">`)}
       ${field(`${t('inv.customerId')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-cust" name="customer_id" class="ltr" placeholder="user-42">', esc(t('inv.custHelp')))}
+      <div class="grid grid-2">
+        ${field(`${t('inv.customerName')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-name" name="customer_name" maxlength="128">')}
+        ${field(`${t('inv.customerPhone')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-phone" name="customer_phone" class="ltr" inputmode="tel" maxlength="24" placeholder="+989121234567">')}
+        ${field(`${t('inv.customerEmail')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-email" name="customer_email" class="ltr" type="email" maxlength="254" placeholder="name@example.com">')}
+        ${field(`${t('inv.customerAccount')} <span class="muted">(${esc(t('common.optional'))})</span>`, '<input id="ni-account" name="customer_account" class="ltr" maxlength="128">')}
+      </div>
     </form>`,
     buttons: [{ label: t('common.cancel'), value: null }, { label: t('inv.create'), value: (w) => formData($('#ni', w)) }],
   });
   if (!d) return;
-  for (const k of ['asset', 'description', 'customer_id']) if (!d[k]) delete d[k];
+  for (const k of ['asset', 'description', 'customer_id', 'customer_name', 'customer_phone', 'customer_email', 'customer_account']) if (!d[k]) delete d[k];
   try {
     const r = await api('POST', '/api/panel/invoices', d);
     await modal({
@@ -323,6 +332,10 @@ if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_co
           ['asset', 'string', L('مثل USDT_BEP20؛ اگر ندهید مشتری انتخاب می‌کند', 'e.g. USDT_BEP20; if omitted the customer chooses')],
           ['order_id', 'string ≤128', L('شناسه سفارش شما', 'Your order id')],
           ['customer_id', 'string ≤128', L('شناسه کاربر شما؛ از نشست سرور بفرستید نه ورودی کاربر', 'Your user id; take it from the server session, not user input')],
+          ['customer_name', 'string ≤128', L('نام مشتری (اختیاری، فقط برای ثبت و نمایش در پنل شما)', 'Customer name (optional, recorded for your own records)')],
+          ['customer_email', 'string', L('ایمیل مشتری (اختیاری)', 'Customer email (optional)')],
+          ['customer_phone', 'string ≤24', L('شماره تلفن مشتری (اختیاری)، مثل +989121234567', 'Customer phone (optional), e.g. +989121234567')],
+          ['customer_account', 'string ≤128', L('اکانت یا نام کاربری مشتری در سیستم شما (اختیاری)', 'Customer account / username in your system (optional)')],
           ['description', 'string ≤500', L('نمایش در صفحه پرداخت', 'Shown on the payment page')],
           ['success_url / cancel_url', 'URL', L('مقصد بازگشت مشتری', 'Where the customer returns')],
           ['metadata', 'object', L('در Webhook برمی‌گردد', 'Echoed back in webhooks')],
@@ -337,7 +350,7 @@ if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_co
           <li>${code('GET /v1/invoices?status=&limit=&before=')} — ${L('limit ۱ تا ۱۰۰ (پیش‌فرض ۲۰)، before = زمان ISO. پاسخ: <code>{"data":[…]}</code>', 'limit 1–100 (default 20), before = ISO time. Response: <code>{"data":[…]}</code>')}</li>
           <li>${code('POST /v1/invoices/:id/cancel')} — ${L('فقط pending/expired بدون پرداخت', 'only pending/expired without payments')}</li>
         </ul>
-        ${pre(`{\n  "id": "…", "order_id": "1001", "customer_id": null, "status": "pending",\n  "price_amount": "25", "price_currency": "USD",\n  "asset": "USDT_BEP20", "network": "bsc", "address": "0x…", "memo": null,\n  "pay_amount": "25.000000", "amount_received": "0", "amount_pending": "0", "rate": "1",\n  "fee_amount": "0", "network_fee": "0", "fee_paid_by": "merchant", "net_amount": null,\n  "is_late": false, "payment_url": "${base.replace('/v1', '')}/pay/…",\n  "metadata": {}, "expires_at": "…", "paid_at": null, "created_at": "…",\n  "deposits": [{ "tx_hash": "0x…", "from": "0x…", "amount": "25", "confirmations": 12,\n                 "status": "confirmed", "detected_at": "…" }]\n}`)}
+        ${pre(`{\n  "id": "…", "invoice_number": 1001, "order_id": "ORD-1", "customer_id": null,\n  "customer_name": "Ali Rezaei", "customer_email": "ali@example.com", "customer_phone": "+989121234567", "customer_account": "ali42", "status": "pending",\n  "price_amount": "25", "price_currency": "USD",\n  "asset": "USDT_BEP20", "network": "bsc", "address": "0x…", "memo": null,\n  "pay_amount": "25.000000", "amount_received": "0", "amount_pending": "0", "rate": "1",\n  "fee_amount": "0", "network_fee": "0", "fee_paid_by": "merchant", "net_amount": null,\n  "is_late": false, "payment_url": "${base.replace('/v1', '')}/pay/…",\n  "metadata": {}, "expires_at": "…", "paid_at": null, "created_at": "…",\n  "deposits": [{ "tx_hash": "0x…", "from": "0x…", "amount": "25", "confirmations": 12,\n                 "status": "confirmed", "detected_at": "…" }]\n}`)}
         <p class="small muted">${L('<code>asset</code>، <code>address</code> و <code>pay_amount</code> تا انتخاب ارز توسط مشتری ممکن است null باشند. <code>memo</code> فقط برای TON است. <code>net_amount</code> فقط بعد از paid مقدار دارد.', '<code>asset</code>, <code>address</code> and <code>pay_amount</code> may be null until the customer picks a currency. <code>memo</code> is TON only. <code>net_amount</code> is set only after paid.')}</p>
         ${table([L('وضعیت فاکتور', 'Invoice status'), L('معنی', 'Meaning')], [
           ['<span class="mono small">pending</span>', esc(L('منتظر پرداخت', 'Waiting for payment'))],

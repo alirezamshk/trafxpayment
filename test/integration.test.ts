@@ -104,6 +104,23 @@ describe('invoice lifecycle + ledger', () => {
     expect((await ledger.balances(pool, m.id))[0]!.balance).toBe(30_000_000n - 300_000n);
   });
 
+  it('numbers invoices per merchant and records customer details', async () => {
+    const m = await merchant();
+    const other = await merchant();
+    const a = await invoices.create(m.id, {
+      price_amount: '5', price_currency: 'USD',
+      customer_name: ' Ali Rezaei ', customer_email: 'ali@example.com', customer_phone: '+989121234567', customer_account: 'ali42',
+    });
+    const b = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD' });
+    const c = await invoices.create(other.id, { price_amount: '5', price_currency: 'USD' });
+    expect([a.invoice_number, b.invoice_number, c.invoice_number].map(Number)).toEqual([1, 2, 1]);
+    const out = invoices.serialize(a, []);
+    expect(out).toMatchObject({ invoice_number: 1, customer_name: 'Ali Rezaei', customer_email: 'ali@example.com', customer_phone: '+989121234567', customer_account: 'ali42' });
+    expect(invoices.serialize(b, []).customer_name).toBeNull();
+    await expect(invoices.create(m.id, { price_amount: '5', price_currency: 'USD', customer_email: 'not-an-email' })).rejects.toThrow(/customer_email/);
+    await expect(invoices.create(m.id, { price_amount: '5', price_currency: 'USD', customer_phone: 'abc' })).rejects.toThrow(/customer_phone/);
+  });
+
   it('expires untouched invoices and lets merchants cancel them', async () => {
     const m = await merchant();
     const a = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD' });

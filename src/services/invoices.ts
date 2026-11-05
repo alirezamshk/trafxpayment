@@ -14,6 +14,11 @@ export interface InvoiceRow {
   id: string;
   merchant_id: string;
   order_id: string | null;
+  invoice_number: string;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  customer_account: string | null;
   description: string | null;
   price_amount: string;
   price_currency: string;
@@ -90,6 +95,12 @@ export interface CreateInvoiceInput {
   expires_in_minutes?: number;
   /** Merchant's own user id: that user always gets the same deposit address. */
   customer_id?: string;
+  /** Optional contact details of the payer, recorded on the invoice for the merchant's own bookkeeping. */
+  customer_name?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  /** The payer's account/username in the merchant's own system. */
+  customer_account?: string;
   /** Who pays the deposit network fee; defaults to the merchant's setting. */
   fee_paid_by?: 'merchant' | 'customer';
 }
@@ -187,6 +198,16 @@ export class InvoiceService {
       throw new InvoiceError('customer_id must be 1-128 characters: letters, digits, . _ - @ : +');
     }
 
+    const customerName = input.customer_name?.trim() || null;
+    const customerEmail = input.customer_email?.trim() || null;
+    const customerPhone = input.customer_phone?.trim() || null;
+    const customerAccount = input.customer_account?.trim() || null;
+    if (customerName && customerName.length > 128) throw new InvoiceError('customer_name must be at most 128 characters');
+    if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) throw new InvoiceError('customer_email is not a valid email address');
+    if (customerEmail && customerEmail.length > 254) throw new InvoiceError('customer_email must be at most 254 characters');
+    if (customerPhone && !/^\+?[0-9][0-9\s().-]{3,23}$/.test(customerPhone)) throw new InvoiceError('customer_phone must be 4-24 characters: digits, spaces, + ( ) . -');
+    if (customerAccount && customerAccount.length > 128) throw new InvoiceError('customer_account must be at most 128 characters');
+
     // Quote before opening the DB transaction so a slow price API never holds locks.
     const feePaidBy = input.fee_paid_by ?? null;
     if (feePaidBy && !['merchant', 'customer'].includes(feePaidBy)) throw new InvoiceError("fee_paid_by must be 'merchant' or 'customer'");
@@ -204,10 +225,16 @@ export class InvoiceService {
           throw new InvoiceError(`An invoice for order_id ${input.order_id} already exists`, 409, 'duplicate_order');
         }
       }
+      // The counter update also serialises invoice creation per merchant, so numbers never repeat.
+      const seq = await db.query<{ invoice_seq: string }>(
+        'UPDATE merchants SET invoice_seq = invoice_seq + 1 WHERE id = $1 RETURNING invoice_seq',
+        [merchantId],
+      );
       const { rows } = await db.query<InvoiceRow>(
         `INSERT INTO invoices (merchant_id, order_id, description, price_amount, price_currency,
-                               success_url, cancel_url, metadata, expires_at, customer_id, fee_paid_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9), $10, $11)
+                               success_url, cancel_url, metadata, expires_at, customer_id, fee_paid_by,
+                               invoice_number, customer_name, customer_email, customer_phone, customer_account)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $9), $10, $11, $12, $13, $14, $15, $16)
          RETURNING *`,
         [
           merchantId,
@@ -221,6 +248,11 @@ export class InvoiceService {
           ttl,
           customerId,
           feePaidBy,
+          seq.rows[0]!.invoice_seq,
+          customerName,
+          customerEmail,
+          customerPhone,
+          customerAccount,
         ],
       );
       let invoice = rows[0]!;
@@ -674,8 +706,13 @@ export class InvoiceService {
     const fmt = (v: string | null) => (v === null || !asset ? null : fromBaseUnits(v, asset.decimals));
     return {
       id: inv.id,
+      invoice_number: Number(inv.invoice_number),
       order_id: inv.order_id,
       customer_id: inv.customer_id,
+      customer_name: inv.customer_name,
+      customer_email: inv.customer_email,
+      customer_phone: inv.customer_phone,
+      customer_account: inv.customer_account,
       description: inv.description,
       status: inv.status,
       price_amount: trimDecimal(inv.price_amount),
