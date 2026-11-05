@@ -319,7 +319,7 @@ if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_co
         <p>${code('POST /v1/invoices')} → <b>201</b></p>
         ${table(head, rows([
           ['price_amount *', 'string|number', L('مبلغ سفارش', 'Order amount')],
-          ['price_currency', 'string', L('پیش‌فرض USD', 'Default USD')],
+          ['price_currency', 'string', L('پیش‌فرض USD. ارز دیجیتال (USDT، TRX، BNB، ETH، TON، POL) یا فیات CoinGecko مثل USD/EUR. ریال و تومان (IRR/IRT) پشتیبانی نمی‌شود؛ مبلغ را خودتان به یکی از این ارزها تبدیل کنید', 'Default USD. A crypto symbol (USDT, TRX, BNB, ETH, TON, POL) or a CoinGecko fiat such as USD/EUR. Rial/Toman (IRR/IRT) is not supported; convert the amount yourself first')],
           ['asset', 'string', L('مثل USDT_BEP20؛ اگر ندهید مشتری انتخاب می‌کند', 'e.g. USDT_BEP20; if omitted the customer chooses')],
           ['order_id', 'string ≤128', L('شناسه سفارش شما', 'Your order id')],
           ['customer_id', 'string ≤128', L('شناسه کاربر شما؛ از نشست سرور بفرستید نه ورودی کاربر', 'Your user id; take it from the server session, not user input')],
@@ -378,6 +378,7 @@ if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_co
       sec(L('نکات مهم', 'Integration tips'), `<ul class="small">
         <li>${L('سفارش را فقط با Webhook <code>invoice.paid</code> (یا خواندن وضعیت از API) تکمیل کنید، نه با بازگشت مشتری به success_url.', 'Fulfil orders only on the <code>invoice.paid</code> webhook (or by reading the status via the API), never on the customer returning to success_url.')}</li>
         <li>${L('نرخ هنگام صدور فاکتور قفل می‌شود؛ <code>pay_amount</code> را همان‌طور که هست نمایش دهید.', 'The rate is locked when the invoice is created; show <code>pay_amount</code> as is.')}</li>
+        <li>${L('مبلغ را با ارز پشتیبانی‌شده (مثلاً USDT یا USD) بفرستید؛ تبدیل تومان با شماست و نرخ را هنگام ساخت فاکتور در سفارش ذخیره کنید.', 'Send the amount in a supported currency (e.g. USDT or USD). Converting from Toman is up to you; store the rate on your order when you create the invoice.')}</li>
         <li>${L('پیش از راه‌اندازی واقعی، چرخه کامل را با مبلغ کم تست کنید.', 'Test the full cycle with a small amount before going live.')}</li></ul>`),
     ].join('');
   },
