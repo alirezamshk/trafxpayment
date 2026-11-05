@@ -30,6 +30,7 @@ async function start() {
       { id: 'addresses', label: t('m.nav.addresses'), icon: 'wallet' },
       { section: t('m.nav.secDev') },
       { id: 'developers', label: t('m.nav.dev'), icon: 'code' },
+      { id: 'apidocs', label: t('m.nav.apidocs'), icon: 'code' },
       { section: t('m.nav.secAccount') },
       { id: 'settings', label: t('m.nav.settings'), icon: 'settings' },
       { id: 'security', label: t('m.nav.security'), icon: 'shield' },
@@ -276,6 +277,109 @@ if (!hash_equals($sig, $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) { http_response_co
       if (!(await confirmDialog(t('dev.rotateTitle'), esc(t('dev.rotateQ')), { danger: true, ok: t('dev.rotate') }))) return;
       try { $('#secret').innerHTML = copyField((await api('POST', '/api/panel/webhook-secret/rotate')).webhook_secret); } catch (e) { toast(errText(e), 'err'); }
     };
+  },
+
+  async apidocs(el, ctx) {
+    const L = (fa, en) => (LANG === 'fa' ? fa : en);
+    ctx.setHeader(t('m.nav.apidocs'), esc(L('مرجع کامل API برای اتصال سایت یا اپ شما', 'Full API reference to connect your site or app')));
+    const base = location.origin + '/v1';
+    const code = (s) => `<code>${esc(s)}</code>`;
+    const pre = (s) => `<pre>${esc(s)}</pre>`;
+    const head = [L('فیلد', 'Field'), L('نوع', 'Type'), L('توضیح', 'Description')];
+    const rows = (list) => list.map(([a, b, c]) => [`<span class="mono small">${esc(a)}</span>`, `<span class="small muted">${esc(b)}</span>`, esc(c)]);
+    const sec = (title, body, desc = '') => panel({ title, desc, body: `<div class="stack">${body}</div>` });
+
+    el.innerHTML = [
+      sec(L('شروع سریع', 'Quick start'), `
+        <p>${L('همه درخواست‌ها <b>سرور به سرور</b> هستند؛ کلید API را هرگز در مرورگر یا اپ موبایل نگذارید.', 'All requests are <b>server to server</b>. Never put the API key in a browser or mobile app.')}</p>
+        <p>${L('آدرس پایه', 'Base URL')}: ${code(base)} · JSON · ${L('مبالغ به‌صورت رشته اعشاری', 'amounts are decimal strings')}</p>
+        <ol class="small">
+          <li>${L('در «API و Webhook» یک کلید API بسازید (فقط یک‌بار نمایش داده می‌شود).', 'Create an API key under “API & webhooks” (shown only once).')}</li>
+          <li>${L('آدرس Webhook و آدرس تسویه هر ارز را وارد کنید.', 'Set your webhook URL and the payout address for each currency.')}</li>
+          <li>${L('برای هر سفارش فاکتور بسازید و مشتری را به <code>payment_url</code> بفرستید.', 'Create an invoice per order and send the customer to <code>payment_url</code>.')}</li>
+          <li>${L('نتیجه را از Webhook بگیرید، امضا را بررسی کنید و سفارش را تکمیل کنید.', 'Receive the result by webhook, verify the signature, then fulfil the order.')}</li>
+        </ol>
+        ${pre(`curl -X POST ${base}/invoices \\\n  -H "Authorization: Bearer txp_..." -H "Content-Type: application/json" \\\n  -d '{"price_amount":"25","price_currency":"USD","order_id":"1001"}'`)}`),
+
+      sec(L('احراز هویت و خطاها', 'Authentication & errors'), `
+        ${pre('Authorization: Bearer txp_XXXXXXXX')}
+        <p class="small">${L('اگر برای کلید «IPهای مجاز» تنظیم کرده باشید، فقط از همان IPها پذیرفته می‌شود.', 'If the key has allowed IPs, only those are accepted.')}</p>
+        ${pre('{ "error": { "code": "not_found", "message": "Invoice not found" } }')}
+        ${table([ 'HTTP', 'code', L('معنی', 'Meaning')], [
+          ['400', '<span class="mono small">asset_not_allowed</span>', esc(L('ارز برای حساب شما فعال نیست یا ورودی نامعتبر است', 'Currency not enabled for your account, or invalid input'))],
+          ['401', '<span class="mono small">unauthorized</span>', esc(L('کلید نامعتبر یا IP مجاز نیست', 'Invalid key or IP not allowed'))],
+          ['404', '<span class="mono small">not_found</span>', esc(L('فاکتور پیدا نشد', 'Invoice not found'))],
+          ['409', '<span class="mono small">not_cancellable</span>', esc(L('فاکتور پرداخت دارد', 'Invoice already has payments'))],
+          ['409', '<span class="mono small">nothing_to_pay</span>', esc(L('موجودی یا آدرس تسویه برای این ارز نیست', 'No balance or payout address for this currency'))],
+          ['409', '<span class="mono small">address_on_hold</span>', esc(L('آدرس تسویه به‌تازگی تغییر کرده (۲۴ ساعت انتظار)', 'Payout address changed recently (24 h hold)'))],
+          ['503', '<span class="mono small">rate_unavailable</span>', esc(L('نرخ ارز در دسترس نیست؛ بعداً تلاش کنید', 'Exchange rate unavailable, retry later'))],
+        ], { empty: '' })}`),
+
+      sec(L('ساخت فاکتور', 'Create an invoice'), `
+        <p>${code('POST /v1/invoices')} → <b>201</b></p>
+        ${table(head, rows([
+          ['price_amount *', 'string|number', L('مبلغ سفارش', 'Order amount')],
+          ['price_currency', 'string', L('پیش‌فرض USD', 'Default USD')],
+          ['asset', 'string', L('مثل USDT_BEP20؛ اگر ندهید مشتری انتخاب می‌کند', 'e.g. USDT_BEP20; if omitted the customer chooses')],
+          ['order_id', 'string ≤128', L('شناسه سفارش شما', 'Your order id')],
+          ['customer_id', 'string ≤128', L('شناسه کاربر شما؛ از نشست سرور بفرستید نه ورودی کاربر', 'Your user id; take it from the server session, not user input')],
+          ['description', 'string ≤500', L('نمایش در صفحه پرداخت', 'Shown on the payment page')],
+          ['success_url / cancel_url', 'URL', L('مقصد بازگشت مشتری', 'Where the customer returns')],
+          ['metadata', 'object', L('در Webhook برمی‌گردد', 'Echoed back in webhooks')],
+          ['expires_in_minutes', 'integer', L('مهلت پرداخت', 'Payment deadline')],
+          ['fee_paid_by', 'merchant|customer', L('کارمزد شبکه از سهم شما یا اضافه بر مبلغ مشتری', 'Network fee from your share or added to the customer’s amount')],
+        ]), { empty: '' })}
+        <p class="small">${L('مشتری را به <code>payment_url</code> هدایت کنید.', 'Redirect the customer to <code>payment_url</code>.')}</p>`),
+
+      sec(L('خواندن، فهرست و لغو', 'Read, list, cancel'), `
+        <ul class="small">
+          <li>${code('GET /v1/invoices/:id')} — ${L('فاکتور + آرایه deposits', 'invoice + deposits array')}</li>
+          <li>${code('GET /v1/invoices?status=&limit=&before=')} — ${L('limit ۱ تا ۱۰۰ (پیش‌فرض ۲۰)، before = زمان ISO. پاسخ: <code>{"data":[…]}</code>', 'limit 1–100 (default 20), before = ISO time. Response: <code>{"data":[…]}</code>')}</li>
+          <li>${code('POST /v1/invoices/:id/cancel')} — ${L('فقط pending/expired بدون پرداخت', 'only pending/expired without payments')}</li>
+        </ul>
+        ${pre(`{\n  "id": "…", "order_id": "1001", "customer_id": null, "status": "pending",\n  "price_amount": "25", "price_currency": "USD",\n  "asset": "USDT_BEP20", "network": "bsc", "address": "0x…", "memo": null,\n  "pay_amount": "25.000000", "amount_received": "0", "amount_pending": "0", "rate": "1",\n  "fee_amount": "0", "network_fee": "0", "fee_paid_by": "merchant", "net_amount": null,\n  "is_late": false, "payment_url": "${base.replace('/v1', '')}/pay/…",\n  "metadata": {}, "expires_at": "…", "paid_at": null, "created_at": "…",\n  "deposits": [{ "tx_hash": "0x…", "from": "0x…", "amount": "25", "confirmations": 12,\n                 "status": "confirmed", "detected_at": "…" }]\n}`)}
+        <p class="small muted">${L('<code>asset</code>، <code>address</code> و <code>pay_amount</code> تا انتخاب ارز توسط مشتری ممکن است null باشند. <code>memo</code> فقط برای TON است. <code>net_amount</code> فقط بعد از paid مقدار دارد.', '<code>asset</code>, <code>address</code> and <code>pay_amount</code> may be null until the customer picks a currency. <code>memo</code> is TON only. <code>net_amount</code> is set only after paid.')}</p>
+        ${table([L('وضعیت فاکتور', 'Invoice status'), L('معنی', 'Meaning')], [
+          ['<span class="mono small">pending</span>', esc(L('منتظر پرداخت', 'Waiting for payment'))],
+          ['<span class="mono small">confirming</span>', esc(L('واریز دیده شد، منتظر تاییدیه', 'Payment seen, awaiting confirmations'))],
+          ['<span class="mono small">paid</span>', esc(L('کامل و تایید شد ← سفارش را تکمیل کنید', 'Complete and confirmed → fulfil the order'))],
+          ['<span class="mono small">partially_paid</span>', esc(L('کمتر از مبلغ پرداخت شده', 'Underpaid'))],
+          ['<span class="mono small">expired</span> / <span class="mono small">cancelled</span>', esc(L('منقضی / لغو شده', 'Expired / cancelled'))],
+        ], { empty: '' })}
+        <p class="small muted">${L('وضعیت واریز (deposit): pending، confirmed، orphaned (از بین رفته). پرداخت اضافه یا دیرهنگام بعد از paid هم اعتبار می‌گیرد و با invoice.updated خبر داده می‌شود.', 'Deposit status: pending, confirmed, orphaned (dropped by the network). Extra or late payments after paid are still credited and announced with invoice.updated.')}</p>`),
+
+      sec(L('ارزها، موجودی و تسویه', 'Currencies, balances, payouts'), `
+        <ul class="small">
+          <li>${code('GET /v1/currencies')} — ${L('ارزهای فعال شما؛ <code>id</code> را در <code>asset</code> بدهید (مثل TRX، USDT_BEP20، USDT_TRC20، ETH، BNB، TON…)', 'your active currencies; pass <code>id</code> as <code>asset</code> (TRX, USDT_BEP20, USDT_TRC20, ETH, BNB, TON…)')}</li>
+          <li>${code('GET /v1/balances')} — <code>{"data":[{"asset":"USDT_BEP20","balance":"120.5"}]}</code></li>
+          <li>${code('GET /v1/payouts')} — ${L('تاریخچه تسویه', 'payout history')}</li>
+          <li>${code('POST /v1/payouts')} <code>{"asset":"USDT_BEP20"}</code> — ${L('درخواست تسویه دستی (201)', 'manual payout request (201)')}</li>
+        </ul>
+        <p class="small muted">${L('وضعیت تسویه: pending_approval، approved، sending، sent، completed، failed، rejected. در شکست یا رد، مبلغ به موجودی برمی‌گردد.', 'Payout status: pending_approval, approved, sending, sent, completed, failed, rejected. On failure or rejection the amount returns to your balance.')}</p>`),
+
+      sec('Webhook', `
+        ${pre('{ "id": "uuid", "event": "invoice.paid", "created_at": "…", "data": { …invoice or payout… } }')}
+        ${table([L('هدر', 'Header'), L('توضیح', 'Description')], [
+          ['<span class="mono small">x-webhook-id</span>', esc(L('شناسه یکتا؛ برای جلوگیری از پردازش تکراری', 'Unique id; use it to avoid duplicate processing'))],
+          ['<span class="mono small">x-webhook-timestamp</span>', esc(L('ثانیه یونیکس', 'Unix seconds'))],
+          ['<span class="mono small">x-webhook-signature</span>', '<span class="mono small">HMAC_SHA256(secret, timestamp + "." + rawBody)</span> (hex)'],
+        ], { empty: '' })}
+        <ul class="small">
+          <li>${L('هر پاسخ غیر 2xx یا timeout (۱۰ ثانیه) تکرار می‌شود: تا ۱۲ بار، با فاصله ۳۰ ثانیه، ۱، ۲، ۴ دقیقه … حداکثر ۶ ساعت.', 'Any non-2xx response or timeout (10 s) is retried: up to 12 times, after 30 s, 1, 2, 4 min … max 6 h.')}</li>
+          <li>${L('یک رویداد ممکن است بیش از یک‌بار برسد و ترتیب تضمین نیست؛ پردازش را idempotent بنویسید یا وضعیت را با API بخوانید.', 'An event may arrive more than once and order is not guaranteed; make handling idempotent or re-read the state via the API.')}</li>
+          <li>${L('امضا را روی <b>بدنه خام</b> بررسی کنید و زمان را حداکثر ۵ دقیقه تلورانس بدهید. ریدایرکت دنبال نمی‌شود.', 'Verify the signature on the <b>raw body</b> and allow at most 5 minutes of clock skew. Redirects are not followed.')}</li>
+        </ul>
+        <p class="small muted">${esc(t('dev.events'))}: <code>invoice.confirming</code> · <code>invoice.paid</code> · <code>invoice.updated</code> · <code>invoice.partially_paid</code> · <code>invoice.expired</code> · <code>invoice.cancelled</code> · <code>payout.created</code> · <code>payout.completed</code> · <code>payout.failed</code> · <code>payout.rejected</code></p>
+        <h3>Node.js</h3>
+        ${pre(`app.post('/trafx-webhook', express.raw({ type: 'application/json' }), (req, res) => {\n  const ts = req.header('x-webhook-timestamp');\n  const sig = req.header('x-webhook-signature') || '';\n  const body = req.body.toString('utf8');\n  const expected = crypto.createHmac('sha256', SECRET).update(ts + '.' + body).digest('hex');\n  const ok = sig.length === expected.length &&\n    crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)) &&\n    Math.abs(Date.now() / 1000 - Number(ts)) < 300;\n  if (!ok) return res.sendStatus(400);\n  const evt = JSON.parse(body);\n  if (evt.event === 'invoice.paid') { /* fulfil evt.data.order_id once */ }\n  res.sendStatus(200);\n});`)}
+        <h3>PHP</h3>
+        ${pre(`$body = file_get_contents('php://input');\n$ts  = $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] ?? '';\n$sig = $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? '';\n$expected = hash_hmac('sha256', $ts . '.' . $body, $secret);\nif (!hash_equals($expected, $sig) || abs(time() - (int)$ts) > 300) { http_response_code(400); exit; }\n$evt = json_decode($body, true);\nif ($evt['event'] === 'invoice.paid') { /* fulfil $evt['data']['order_id'] once */ }\nhttp_response_code(200);`)}`),
+
+      sec(L('نکات مهم', 'Integration tips'), `<ul class="small">
+        <li>${L('سفارش را فقط با Webhook <code>invoice.paid</code> (یا خواندن وضعیت از API) تکمیل کنید، نه با بازگشت مشتری به success_url.', 'Fulfil orders only on the <code>invoice.paid</code> webhook (or by reading the status via the API), never on the customer returning to success_url.')}</li>
+        <li>${L('نرخ هنگام صدور فاکتور قفل می‌شود؛ <code>pay_amount</code> را همان‌طور که هست نمایش دهید.', 'The rate is locked when the invoice is created; show <code>pay_amount</code> as is.')}</li>
+        <li>${L('پیش از راه‌اندازی واقعی، چرخه کامل را با مبلغ کم تست کنید.', 'Test the full cycle with a small amount before going live.')}</li></ul>`),
+    ].join('');
   },
 
   async settings(el, ctx) {

@@ -47,7 +47,7 @@ const I18N = {
     'ch.volume': 'حجم پرداخت روزانه', 'ch.volumeSub': '۱۴ روز اخیر · فاکتورهای دلاری', 'ch.paid': '{n} پرداخت', 'ch.total': 'جمع ۱۴ روز',
     // merchant nav
     'm.panel': 'پنل پذیرنده', 'm.nav.dashboard': 'داشبورد', 'm.nav.invoices': 'فاکتورها', 'm.nav.payouts': 'موجودی و تسویه',
-    'm.nav.addresses': 'آدرس‌های تسویه', 'm.nav.dev': 'API و Webhook', 'm.nav.settings': 'تنظیمات', 'm.nav.security': 'امنیت',
+    'm.nav.addresses': 'آدرس‌های تسویه', 'm.nav.dev': 'API و Webhook', 'm.nav.apidocs': 'مستندات API', 'm.nav.settings': 'تنظیمات', 'm.nav.security': 'امنیت',
     'm.nav.secDev': 'توسعه‌دهندگان', 'm.nav.secAccount': 'حساب',
     // merchant dashboard
     'm.welcome': 'خوش آمدید، {name}', 'm.newLink': 'لینک پرداخت', 'm.setup': 'راه‌اندازی حساب', 'm.setupProgress': '{done} از {total} مرحله',
@@ -234,7 +234,7 @@ const I18N = {
     'au.api_key.created': 'API key created', 'au.api_key.revoked': 'API key revoked', 'au.api_key.ips_changed': 'Allowed IPs changed',
     'ch.volume': 'Daily payment volume', 'ch.volumeSub': 'Last 14 days · USD-priced invoices', 'ch.paid': '{n} paid', 'ch.total': '14-day total',
     'm.panel': 'Merchant dashboard', 'm.nav.dashboard': 'Overview', 'm.nav.invoices': 'Invoices', 'm.nav.payouts': 'Balance & payouts',
-    'm.nav.addresses': 'Payout addresses', 'm.nav.dev': 'API & webhooks', 'm.nav.settings': 'Settings', 'm.nav.security': 'Security',
+    'm.nav.addresses': 'Payout addresses', 'm.nav.dev': 'API & webhooks', 'm.nav.apidocs': 'API documentation', 'm.nav.settings': 'Settings', 'm.nav.security': 'Security',
     'm.nav.secDev': 'Developers', 'm.nav.secAccount': 'Account',
     'm.welcome': 'Welcome back, {name}', 'm.newLink': 'Payment link', 'm.setup': 'Finish setting up', 'm.setupProgress': '{done} of {total} done',
     'm.setup.address': 'Add a payout wallet address', 'm.setup.key': 'Create an API key', 'm.setup.webhook': 'Add your webhook URL',
