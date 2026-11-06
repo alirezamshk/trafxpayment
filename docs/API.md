@@ -164,6 +164,8 @@ Authorization: Bearer txp_XXXXXXXX
               "decimals": 18, "contract": "0x...", "confirmations": 15 } ] }
 ```
 
+`GET /v1/assets` همین فهرست را برای کل درگاه (بدون کلید و بدون محدودیت حساب شما) می‌دهد.
+
 مقدار `id` را در فیلد `asset` هنگام ساخت فاکتور بدهید. شناسه‌های رایج: `TRX`، `USDT_TRC20`، `ETH`، `USDT_ERC20`، `BNB`، `USDT_BEP20`، `POL`، `USDT_POLYGON`، `TON`، `USDT_TON` (هر کدام فقط اگر مدیر فعال کرده باشد).
 
 ## ۶. موجودی و تسویه

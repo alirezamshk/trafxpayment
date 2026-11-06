@@ -82,6 +82,7 @@ sudo bash install.sh
 | GET | `/v1/balances` | موجودی قابل تسویه |
 | GET/POST | `/v1/payouts` | تاریخچه / درخواست تسویه `{asset}` |
 | GET | `/v1/currencies` | ارزهای فعال برای حساب شما |
+| GET | `/v1/assets` | همهٔ ارزهای فعال درگاه (عمومی، بدون کلید) |
 
 وضعیت فاکتور: `pending` → `confirming` → `paid`؛ همچنین `partially_paid`، `expired`، `cancelled`.
 پاسخ شامل `payment_url` است؛ مشتری را به آن هدایت کنید.

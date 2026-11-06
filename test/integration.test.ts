@@ -438,9 +438,12 @@ describe('minimum amounts and deposit network fee', () => {
     await ledger.settings.set(pool, 'USDT_TRC20', { ...ledger.settings.defaults('USDT_TRC20'), minAmount: 10_000_000n, depositFee: 0n });
     await expect(invoices.create(m.id, { price_amount: '4', price_currency: 'USD', asset: 'USDT_TRC20' })).rejects.toThrow(/minimum/);
     const open = await invoices.create(m.id, { price_amount: '4', price_currency: 'USD' });
-    const ids = (await invoices.payableAssets(open)).map((a) => a.id);
+    const list = await invoices.payableAssets(open);
+    const ids = list.filter((a) => !('below_minimum' in a)).map((a) => a.id);
     expect(ids).not.toContain('USDT_TRC20');
     expect(ids).toContain('USDT_BEP20');
+    // The network under its minimum is still listed, flagged with that minimum, so the payer knows why.
+    expect(list.find((a) => a.id === 'USDT_TRC20')).toMatchObject({ below_minimum: true, min_amount: '10', pay_amount: null });
     await expect(invoices.selectAsset(open.id, 'USDT_TRC20')).rejects.toThrow(/minimum/);
     // 20 USD is fine on TRC20.
     expect((await invoices.create(m.id, { price_amount: '20', price_currency: 'USD', asset: 'USDT_TRC20' })).pay_amount).toBe('20000000');

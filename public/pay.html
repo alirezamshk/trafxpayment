@@ -117,9 +117,13 @@ function render() {
   }
   if (!inv.asset) {
     card.innerHTML = `${sum}<div class="co-body">${steps(0)}<h2>${esc(t('pay.choose'))}</h2>
-      <div class="nets">${inv.assets.map((a) => `<button class="net" data-asset="${esc(a.id)}">${coin(a.symbol)}
+      <div class="nets">${inv.assets.map((a) => a.below_minimum
+        ? `<button class="net" disabled aria-disabled="true">${coin(a.symbol)}
+        <span class="meta"><b>${esc(a.symbol)}</b><span>${esc(t('pay.onNetwork', { n: a.network_name }))} · ${esc(t('pay.minimum', { m: fmtAmount(a.min_amount), s: a.symbol }))}</span></span></button>`
+        : `<button class="net" data-asset="${esc(a.id)}">${coin(a.symbol)}
         <span class="meta"><b>${esc(a.symbol)}</b><span>${esc(t('pay.onNetwork', { n: a.network_name }))}${LOW_FEE[a.network] ? ` · <span class="tag-low">${esc(t('pay.lowFee'))}</span>` : ''}</span></span>
         ${a.pay_amount ? `<span class="amt">${esc(fmtAmount(a.pay_amount))}</span>` : ''}</button>`).join('') || alertBox('warn', esc(t('pay.noMethods')))}</div>
+      ${inv.assets.length && inv.assets.every((a) => a.below_minimum) ? alertBox('warn', esc(t('pay.noMethods'))) : ''}
       ${timerHtml()}</div>`;
     $$('[data-asset]').forEach((b) => b.addEventListener('click', async () => {
       if (b.getAttribute('aria-disabled') === 'true') return;

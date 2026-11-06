@@ -168,7 +168,7 @@ const I18N = {
     // pay page
     'pay.title': 'پرداخت امن', 'pay.secure': 'امن', 'pay.due': 'مبلغ قابل پرداخت', 'pay.footer': 'پرداخت امن با TrafxPayment',
     'pay.step.choose': 'انتخاب ارز', 'pay.step.pay': 'پرداخت', 'pay.step.confirm': 'تایید شبکه', 'pay.step.done': 'تکمیل',
-    'pay.choose': 'ارز و شبکه پرداخت را انتخاب کنید', 'pay.lowFee': 'کارمزد کم', 'pay.onNetwork': 'شبکه {n}', 'pay.noMethods': 'هیچ روش پرداختی برای این مبلغ در دسترس نیست.',
+    'pay.choose': 'ارز و شبکه پرداخت را انتخاب کنید', 'pay.lowFee': 'کارمزد کم', 'pay.onNetwork': 'شبکه {n}', 'pay.noMethods': 'هیچ روش پرداختی برای این مبلغ در دسترس نیست.', 'pay.minimum': 'حداقل {m} {s}',
     'pay.sendExact': 'دقیقاً این مقدار را ارسال کنید', 'pay.inclFee': 'شامل {f} {s} کارمزد شبکه', 'pay.copyAmount': 'کپی مبلغ', 'pay.depositAddr': 'آدرس واریز',
     'pay.copyAddr': 'کپی آدرس', 'pay.memo': 'کامنت / Memo (الزامی)', 'pay.memoWarn': 'بدون نوشتن این کامنت در کیف پول، پرداخت شما شناسایی <b>نمی‌شود</b>.',
     'pay.openWallet': 'باز کردن در کیف پول (Tonkeeper)', 'pay.onlyNet': 'فقط <b>{s}</b> روی شبکه <b>{n}</b> بفرستید. ارسال روی شبکه دیگر باعث از دست رفتن وجه می‌شود.',
@@ -347,7 +347,7 @@ const I18N = {
     'a.au.sub': 'Sign-ins, security changes and every admin action', 'a.acc.title': 'Admin account security', 'a.acc.desc': 'When on, every change in the admin console needs a code',
     'pay.title': 'Secure payment', 'pay.secure': 'Secure', 'pay.due': 'Amount due', 'pay.footer': 'Secured by TrafxPayment',
     'pay.step.choose': 'Currency', 'pay.step.pay': 'Payment', 'pay.step.confirm': 'Confirmation', 'pay.step.done': 'Done',
-    'pay.choose': 'Choose how you want to pay', 'pay.lowFee': 'Low fee', 'pay.onNetwork': '{n} network', 'pay.noMethods': 'No payment method is available for this amount.',
+    'pay.choose': 'Choose how you want to pay', 'pay.lowFee': 'Low fee', 'pay.onNetwork': '{n} network', 'pay.noMethods': 'No payment method is available for this amount.', 'pay.minimum': 'minimum {m} {s}',
     'pay.sendExact': 'Send exactly this amount', 'pay.inclFee': 'Includes {f} {s} network fee', 'pay.copyAmount': 'Copy amount', 'pay.depositAddr': 'Deposit address',
     'pay.copyAddr': 'Copy address', 'pay.memo': 'Comment / memo (required)', 'pay.memoWarn': 'Without this comment in your wallet, your payment <b>cannot be matched</b>.',
     'pay.openWallet': 'Open in wallet (Tonkeeper)', 'pay.onlyNet': 'Send only <b>{s}</b> on the <b>{n}</b> network. Sending on another network loses the funds.',

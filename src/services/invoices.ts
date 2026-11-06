@@ -317,8 +317,9 @@ export class InvoiceService {
   }
 
   /**
-   * Assets the payer may pick for an unassigned invoice: enabled ones whose converted amount meets
-   * the minimum, with the amount that would be due. Assets whose rate is unavailable are listed without one.
+   * Assets offered for an unassigned invoice, with the amount that would be due. Ones whose converted
+   * amount is under the minimum are listed with `below_minimum` + `min_amount` (not selectable);
+   * assets whose rate is unavailable are listed without an amount.
    */
   async payableAssets(inv: InvoiceRow) {
     const out = [];
@@ -328,7 +329,12 @@ export class InvoiceService {
         const q = await this.quote(asset, inv.price_amount, inv.price_currency, inv.merchant_id, inv.fee_paid_by);
         out.push({ ...a, pay_amount: fromBaseUnits(q.payAmount, asset.decimals) });
       } catch (err) {
-        if ((err as InvoiceError).code === 'below_minimum') continue;
+        if ((err as InvoiceError).code === 'below_minimum') {
+          // Still listed, but not selectable: the payer sees why (the minimum for this network).
+          const min = (await this.deps.ledger.settings.get(pool, asset.id)).minAmount;
+          out.push({ ...a, pay_amount: null, below_minimum: true, min_amount: fromBaseUnits(min, asset.decimals) });
+          continue;
+        }
         out.push({ ...a, pay_amount: null });
       }
     }
