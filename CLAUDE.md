@@ -26,8 +26,12 @@ branch `claude/lucid-hamilton-aez7rd`.
 - Full TRX flow tested on TRON Nile testnet: invoice → payment → confirm → fee → sweep → payout. ✅
 - Mainnet installed fresh (new mnemonic). Owner decided to use **USDT-BEP20 + TRX** (USDT-TRC20 disabled
   in admin currency settings because of its transfer cost).
-- Next: small real-money test ($1) with TRX and USDT-BEP20 on mainnet, including payout; then set cold
-  wallets (`COLD_WALLET_*` in `.env.signer`).
+- 2026-11-07: real-money mainnet test passed for **TRX** and **USDT-BEP20** (invoice → pay → confirm → sweep
+  incl. BNB gas top-up → payout). TRX min amount lowered to 3 in admin.
+- Server notes: `.env` has `BSC_RPC_URL=https://bsc-rpc.publicnode.com` (bsc-dataseed rejects eth_getLogs)
+  and `EVM_MAX_BLOCKS_PER_TICK=1000`. The last install fell back to a local build (`APP_IMAGE=trafxpayment-app`),
+  so updating the server = `git pull` in /opt/trafxpayment, then `sudo bash install.sh`.
+- Next: set cold wallets (`COLD_WALLET_*` in `.env.signer`).
 - Later ideas: NOWPayments-compatible API, Telegram notifications (needs proxy in Iran), TRON energy rental.
 
 ## Working locally
