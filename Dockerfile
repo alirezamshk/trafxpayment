@@ -12,6 +12,9 @@ RUN npm run build && npm prune --omit=dev
 FROM ${DOCKERHUB}/library/node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# pg_dump for the nightly Telegram backup (same major version as the database). A local build on a server
+# that cannot reach the Alpine mirrors still succeeds; the backup then reports that pg_dump is missing.
+RUN apk add --no-cache postgresql16-client || echo "WARNING: postgresql16-client not installed (Telegram backup disabled)"
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./

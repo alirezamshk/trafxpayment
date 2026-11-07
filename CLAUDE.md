@@ -31,6 +31,8 @@ branch `claude/lucid-hamilton-aez7rd`.
 - Server notes: `.env` has `BSC_RPC_URL=https://bsc-rpc.publicnode.com` (bsc-dataseed rejects eth_getLogs)
   and `EVM_MAX_BLOCKS_PER_TICK=1000`. The last install fell back to a local build (`APP_IMAGE=trafxpayment-app`),
   so updating the server = `git pull` in /opt/trafxpayment, then `sudo bash install.sh`.
+- Admin → «پشتیبان‌گیری»: nightly pg_dump → gzip → AES-256 (openssl-compatible, owner's password) → Telegram bot
+  (`src/services/backup.ts`, worker job `telegram-backup`; needs the panel proxy in Iran; pg_dump is in the image).
 - Next: set cold wallets (`COLD_WALLET_*` in `.env.signer`).
 - Later ideas: NOWPayments-compatible API, Telegram notifications (needs proxy in Iran), TRON energy rental.
 

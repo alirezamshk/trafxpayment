@@ -859,3 +859,59 @@ describe('address pool concentration', () => {
     expect((await mk()).address).toBe(y.address);
   });
 });
+
+describe('telegram backup', () => {
+  it('encrypts in openssl format, sends once per local day after the hour, and is configured from the admin API', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { gunzipSync } = await import('node:zlib');
+    const { encryptOpenssl, localNow, TelegramBackupJob, getBackupStatus, saveBackupSettings } = await import('../src/services/backup.js');
+
+    // openssl can open what we encrypt
+    const enc = encryptOpenssl(Buffer.from('hello backup'), 'pass-1234');
+    const dec = execFileSync('openssl', ['enc', '-d', '-aes-256-cbc', '-pbkdf2', '-iter', '100000', '-pass', 'pass:pass-1234'], { input: enc });
+    expect(dec.toString()).toBe('hello backup');
+    expect(localNow(new Date('2026-03-01T00:00:00Z'))).toEqual({ date: '2026-03-01', hour: 3 }); // UTC+3:30
+
+    const sent: { url: string; body: unknown }[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      sent.push({ url: String(url), body: init.body });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const silentLog = { info() {}, warn() {}, error() {}, debug() {} };
+      const job = new TelegramBackupJob(pool, silentLog);
+      await saveBackupSettings(pool, { enabled: true, bot_token: '123:' + 'a'.repeat(30), chat_id: '42', password: 'secret-pass', hour: 0 });
+      await job.tick();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.url).toContain('/sendDocument');
+      const file = (sent[0]!.body as FormData).get('document') as Blob;
+      const plain = execFileSync('openssl', ['enc', '-d', '-aes-256-cbc', '-pbkdf2', '-iter', '100000', '-pass', 'pass:secret-pass'], { input: Buffer.from(await file.arrayBuffer()) });
+      expect(gunzipSync(plain).toString()).toContain('CREATE TABLE public.invoices');
+      expect((await getBackupStatus(pool)).last_date).toBe(localNow().date);
+      await job.tick(); // already sent today
+      expect(sent).toHaveLength(1);
+
+      // admin API: token is masked, a masked token keeps the saved one, enabling needs all fields
+      const app = await buildServer();
+      await createAdmin(pool, 'bk@x.io', 'adminpassword1');
+      const al = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'bk@x.io', password: 'adminpassword1', role: 'admin' } });
+      const cookie = String(al.headers['set-cookie']).split(';')[0]!;
+      const view = (await app.inject({ method: 'GET', url: '/api/admin/backup', headers: { cookie } })).json();
+      expect(view.bot_token).toBe('123:***');
+      expect(view.has_password).toBe(true);
+      const put = await app.inject({ method: 'PUT', url: '/api/admin/backup', headers: { cookie }, payload: { enabled: true, bot_token: view.bot_token, chat_id: '43', hour: 4 } });
+      expect(put.statusCode).toBe(200);
+      expect(put.json().chat_id).toBe('43');
+      const bad = await app.inject({ method: 'PUT', url: '/api/admin/backup', headers: { cookie }, payload: { enabled: true, bot_token: '', chat_id: '43', hour: 4 } });
+      expect(bad.statusCode).toBe(400);
+      const run = await app.inject({ method: 'POST', url: '/api/admin/backup/run', headers: { cookie }, payload: {} });
+      expect(run.statusCode).toBe(200);
+      expect(sent).toHaveLength(2);
+      const { rows: au } = await pool.query<{ details: { body: Record<string, unknown> } }>(`SELECT details FROM audit_log WHERE action LIKE '%/backup' ORDER BY created_at DESC LIMIT 1`);
+      expect(JSON.stringify(au[0]!.details)).not.toContain('a'.repeat(30));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

@@ -8,6 +8,7 @@ import { createApiKey, createMerchant, getMerchant, listMerchants } from '../ser
 import { audit, auditList } from '../services/audit.js';
 import { getProxySetting, setProxySetting, testConnectivity } from '../services/network.js';
 import { getCertificate, getCertificateStatus } from '../services/certificates.js';
+import { getBackupSettings, getBackupStatus, maskToken, saveBackupSettings, sendBackup, sendTestMessage, type BackupSettings } from '../services/backup.js';
 import { getWalletReport } from '../sweeper/signer.js';
 import { config } from '../config.js';
 import { applyOutboundProxy, maskProxyUrl, parseProxyUrl } from '../lib/proxy.js';
@@ -29,7 +30,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // With 2FA enabled every admin change needs a fresh code, and every successful change is audited.
   // (A connectivity test changes nothing, so it needs no code and is not audited.)
-  const isMutation = (method: string, url: string) => method !== 'GET' && !url.includes('/2fa') && !url.startsWith('/api/admin/network/test');
+  const isMutation = (method: string, url: string) => method !== 'GET' && !url.includes('/2fa') && !url.startsWith('/api/admin/network/test') && !url.startsWith('/api/admin/backup/test');
   app.addHook('preHandler', async (req) => {
     if (req.adminId && isMutation(req.method, req.url)) await requireOtp('admin', req.adminId, otpFromRequest(req));
   });
@@ -38,6 +39,8 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!req.adminId || !isMutation(req.method, req.url) || reply.statusCode >= 400) return payload;
     const { password: _p, ...body } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.url === 'string') body.url = maskProxyUrl(body.url); // proxy credentials stay out of the log
+    if (typeof body.bot_token === 'string') body.bot_token = maskToken(body.bot_token);
+    if ('backup_password' in body) body.backup_password = body.backup_password ? '***' : body.backup_password;
     const params = req.params as Record<string, string>;
     await audit(pool, {
       actorType: 'admin',
@@ -147,6 +150,52 @@ export async function adminRoutes(app: FastifyInstance) {
       throw httpError(400, 'invalid_proxy', (e as Error).message);
     }
   };
+  // --- nightly encrypted database backup to Telegram
+  const backupView = async () => {
+    const s = await getBackupSettings(pool);
+    return { enabled: s.enabled, bot_token: maskToken(s.bot_token), chat_id: s.chat_id, has_password: !!s.password, hour: s.hour, status: await getBackupStatus(pool) };
+  };
+  const backupInput = z.object({
+    enabled: z.boolean(),
+    bot_token: z.string().trim().max(200).nullable().optional(),
+    chat_id: z.string().trim().max(64).nullable().optional(),
+    backup_password: z.string().min(8).max(200).nullable().optional(), // omitted / null = keep the saved one
+    hour: z.number().int().min(0).max(23),
+  });
+  // Merges the request with the saved settings; a masked token (as shown in the panel) keeps the saved one.
+  const mergedBackup = async (body: unknown): Promise<BackupSettings> => {
+    const b = parse(backupInput, body);
+    const cur = await getBackupSettings(pool);
+    const token = b.bot_token && !b.bot_token.includes('***') ? b.bot_token : b.bot_token === '' ? null : cur.bot_token;
+    if (token && !/^\d+:[\w-]{20,}$/.test(token)) throw httpError(400, 'invalid_token', 'Bot token looks wrong (expected 123456:ABC...)');
+    const next = { enabled: b.enabled, bot_token: token, chat_id: b.chat_id === undefined ? cur.chat_id : b.chat_id || null, password: b.backup_password || cur.password, hour: b.hour };
+    if (next.enabled && (!next.bot_token || !next.chat_id || !next.password)) {
+      throw httpError(400, 'backup_incomplete', 'Bot token, chat id and backup password are required to turn it on');
+    }
+    return next;
+  };
+  app.get('/backup', backupView);
+  app.put('/backup', async (req) => {
+    await saveBackupSettings(pool, await mergedBackup(req.body));
+    return backupView();
+  });
+  app.post('/backup/test', async (req) => {
+    try {
+      await sendTestMessage(await mergedBackup(req.body));
+    } catch (e) {
+      throw httpError(400, 'telegram_failed', (e as Error).message);
+    }
+    return { ok: true };
+  });
+  app.post('/backup/run', async () => {
+    try {
+      const size = await sendBackup(pool, await getBackupSettings(pool));
+      return { ok: true, size, status: await getBackupStatus(pool) };
+    } catch (e) {
+      throw httpError(400, 'backup_failed', (e as Error).message);
+    }
+  });
+
   app.get('/network', proxyView);
   app.put('/network', async (req) => {
     const { url } = parse(proxyUrlInput, req.body);

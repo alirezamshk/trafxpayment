@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { pool } from '../db.js';
+import { TelegramBackupJob } from '../services/backup.js';
 import { CertificateJob } from '../services/certificates.js';
 import { syncOutboundProxy } from '../services/network.js';
 import { registry } from '../context.js';
@@ -13,7 +14,7 @@ import { WebhookDispatcher } from '../workers/webhook-dispatcher.js';
 
 await syncOutboundProxy(pool, (m) => log.info({}, m));
 
-const jobs: Watcher[] = [new WebhookDispatcher(log), new ExpiryWorker(invoices, log), new SettlementWorker(ledger, log)];
+const jobs: Watcher[] = [new WebhookDispatcher(log), new ExpiryWorker(invoices, log), new SettlementWorker(ledger, log), new TelegramBackupJob(pool, log)];
 if (config.API_TLS === 'acme-dns') {
   if (!config.DOMAIN || !config.CF_API_TOKEN) throw new Error('API_TLS=acme-dns needs DOMAIN and CF_API_TOKEN');
   jobs.push(new CertificateJob(pool, log));

@@ -33,6 +33,7 @@ async function start() {
       { id: 'wallets', label: t('a.nav.wallets'), icon: 'wallet' },
       { id: 'assets', label: t('a.nav.assets'), icon: 'coins' },
       { id: 'network', label: t('a.nav.network'), icon: 'globe' },
+      { id: 'backup', label: t('a.nav.backup'), icon: 'lock' },
       { id: 'webhooks', label: t('a.nav.webhooks'), icon: 'bolt' },
       { id: 'audit', label: t('a.nav.audit'), icon: 'list' },
       { id: 'account', label: t('a.nav.account'), icon: 'shield' },
@@ -281,6 +282,57 @@ const VIEWS = {
       });
     });
     runTest({});
+  },
+
+  async backup(el, ctx) {
+    ctx.setHeader(t('a.nav.backup'), esc(t('a.bk.sub')));
+    const cur = await api('GET', '/api/admin/backup');
+    const st = cur.status || {};
+    const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === cur.hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
+    const statusBox = st.last_error
+      ? alertBox('err', `${esc(t('a.bk.lastErr', { t: fmtDate(st.last_error_at) }))}<div class="small" style="white-space:normal"><bdi>${esc(st.last_error)}</bdi></div>`)
+      : st.last_ok_at
+        ? alertBox('ok', esc(t('a.bk.lastOk', { t: fmtDate(st.last_ok_at), s: Math.max(1, Math.round((st.last_size || 0) / 1024)) })))
+        : alertBox('info', esc(t('a.bk.never')));
+    el.innerHTML = `
+      ${panel({ title: t('a.bk.title'), desc: esc(t('a.bk.desc')), actions: `<span class="badge ${cur.enabled ? 'b-ok' : 'b-muted'}">${esc(t(cur.enabled ? 'common.active' : 'common.disabled'))}</span>`, body: `
+        <form id="bk-form" class="stack">
+          <label class="check"><input type="checkbox" id="bk-on" ${cur.enabled ? 'checked' : ''}>${esc(t('a.bk.enabled'))}</label>
+          ${field(esc(t('a.bk.token')), `<input id="bk-token" class="ltr mono" autocomplete="off" spellcheck="false" placeholder="123456789:AA..." value="${esc(cur.bot_token || '')}">`, esc(t('a.bk.tokenH')))}
+          ${field(esc(t('a.bk.chat')), `<input id="bk-chat" class="ltr mono" autocomplete="off" spellcheck="false" placeholder="123456789" value="${esc(cur.chat_id || '')}">`, esc(t('a.bk.chatH')))}
+          ${field(esc(t('a.bk.pass')), `<input id="bk-pass" type="password" class="ltr" autocomplete="new-password" placeholder="${esc(cur.has_password ? t('a.bk.passKeep') : '')}">`, esc(t('a.bk.passH')))}
+          ${field(esc(t('a.bk.hour')), `<select id="bk-hour" class="ltr">${hours}</select>`, esc(t('a.bk.hourH')))}
+          <div class="row">
+            <button type="button" class="btn secondary" id="bk-test">${icon('bolt')}${esc(t('a.bk.test'))}</button>
+            <button type="submit" class="btn" id="bk-save">${esc(t('common.save'))}</button>
+          </div>
+        </form>` })}
+      ${panel({ title: t('a.bk.status'), actions: `<button class="btn sm secondary" id="bk-run">${icon('refresh')}${esc(t('a.bk.run'))}</button>`, body: `${statusBox}
+        <div class="small text-2" style="margin-top:12px">${esc(t('a.bk.restore'))}</div>
+        <div class="mono small ltr" dir="ltr" style="margin-top:6px;white-space:pre-wrap;word-break:break-all">openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -in FILE.sql.gz.enc | gunzip &gt; backup.sql</div>` })}`;
+    const body = () => ({
+      enabled: $('#bk-on', el).checked,
+      bot_token: $('#bk-token', el).value.trim(),
+      chat_id: $('#bk-chat', el).value.trim(),
+      backup_password: $('#bk-pass', el).value || null,
+      hour: Number($('#bk-hour', el).value),
+    });
+    $('#bk-test', el).addEventListener('click', (e) => busy(e.currentTarget, async () => {
+      await api('POST', '/api/admin/backup/test', body());
+      toast(t('a.bk.testOk'));
+    }));
+    $('#bk-form', el).addEventListener('submit', (e) => {
+      e.preventDefault();
+      busy($('#bk-save', el), async () => {
+        await api('PUT', '/api/admin/backup', body());
+        toast(t('common.saved'));
+        VIEWS.backup(el, ctx);
+      });
+    });
+    $('#bk-run', el).addEventListener('click', (e) => busy(e.currentTarget, async () => {
+      try { await api('POST', '/api/admin/backup/run'); toast(t('a.bk.sent')); }
+      finally { VIEWS.backup(el, ctx); }
+    }));
   },
 
   async webhooks(el, ctx) {
