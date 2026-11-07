@@ -368,7 +368,7 @@ if [ "$NET_MODE" = 2 ]; then
 else
   ask TRON_KEY "TronGrid API key (trongrid.io) — strongly recommended" ""
   ask TON_KEY "toncenter API key (@tonapibot on Telegram) — strongly recommended" ""
-  ask BSC_RPC "BSC RPC URL" "https://bsc-dataseed.bnbchain.org"
+  ask BSC_RPC "BSC RPC URL" "https://bsc-rpc.publicnode.com"
   ask ETH_RPC "Ethereum RPC URL (empty = Ethereum disabled)" ""
   ask POLYGON_RPC "Polygon RPC URL (empty = Polygon disabled)" ""
 fi
