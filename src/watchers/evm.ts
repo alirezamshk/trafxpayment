@@ -99,29 +99,39 @@ export class EvmWatcher implements Watcher {
 
   async tick(): Promise<void> {
     const latest = await this.rpc.getBlockNumber();
-    await this.scan(latest);
+    // Fast chains (BSC: a block every ~0.5 s) can leave the cursor far behind after an outage:
+    // keep scanning ranges within this tick until caught up or the time budget is spent.
+    const started = Date.now();
+    for (let i = 0; i < 50 && Date.now() - started < 8000; i++) {
+      if (await this.scan(latest)) break;
+    }
     await this.updateConfirmations(latest);
   }
 
-  private async scan(latest: number): Promise<void> {
+  /** Scans the next block range; returns true when the cursor has reached `latest`. */
+  private async scan(latest: number): Promise<boolean> {
     const stored = await getCursor(pool, this.cursorKey);
     const last = stored !== undefined ? Number(stored) : latest - config.EVM_START_BLOCK_LOOKBACK - 1;
-    if (last >= latest) return;
-
-    const from = Math.max(0, last + 1 - (stored !== undefined ? this.reorgOverlap : 0));
-    const to = Math.min(latest, last + this.maxBlocksPerTick);
+    if (last >= latest) return true;
 
     const watched = await this.invoices.watched(pool, this.chain.id);
     if (watched.length === 0) {
-      await setCursor(pool, this.cursorKey, String(to));
-      return;
+      // Nothing to look for: jump straight to the head.
+      await setCursor(pool, this.cursorKey, String(latest));
+      return true;
     }
+
+    const from = Math.max(0, last + 1 - (stored !== undefined ? this.reorgOverlap : 0));
+    const native = this.assets.find((a) => !a.contract);
+    const scanNative = !!native && watched.some((w) => w.asset === native.id);
+    // Native-coin detection reads every block, so it moves in smaller steps.
+    const span = scanNative ? Math.min(this.maxBlocksPerTick, 50) : this.maxBlocksPerTick;
+    const to = Math.min(latest, last + span);
 
     const byAddress = new Map<string, InvoiceRow>();
     for (const inv of watched) byAddress.set(inv.address!.toLowerCase(), inv);
 
     const tokens = this.assets.filter((a) => a.contract);
-    const native = this.assets.find((a) => !a.contract);
     const transfers: DetectedTransfer[] = [];
 
     // ERC20 / BEP20: filter by `to` topic, 100 addresses per request.
@@ -129,18 +139,13 @@ export class EvmWatcher implements Watcher {
     if (tokens.length) {
       for (let i = 0; i < addrs.length; i += 100) {
         const chunk = addrs.slice(i, i + 100).map((a) => zeroPadValue(a, 32));
-        const logs = await this.rpc.getLogs({
-          fromBlock: from,
-          toBlock: to,
-          address: tokens.map((t) => t.contract!),
-          topics: [TRANSFER_TOPIC, null, chunk],
-        });
+        const logs = await this.logsInRange(from, to, tokens.map((t) => t.contract!), [TRANSFER_TOPIC, null, chunk]);
         transfers.push(...decodeTokenLogs(logs, tokens, new Set(addrs)));
       }
     }
 
     // Native coin: only scan full blocks if some watched invoice actually expects it.
-    if (native && watched.some((w) => w.asset === native.id)) {
+    if (native && scanNative) {
       for (let n = from; n <= to; n++) {
         const txs = await this.rpc.getBlockTransactions(n);
         for (const tx of txs) {
@@ -184,6 +189,19 @@ export class EvmWatcher implements Watcher {
       }
     }
     await setCursor(pool, this.cursorKey, String(to));
+    return to >= latest;
+  }
+
+  /** eth_getLogs, split into smaller ranges when the node refuses the range ("limit exceeded", "range too large"…). */
+  private async logsInRange(from: number, to: number, address: string[], topics: (string | string[] | null)[]): Promise<Log[]> {
+    try {
+      return await this.rpc.getLogs({ fromBlock: from, toBlock: to, address, topics });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (to - from < 1 || !/limit|range|too many|exceed|too large|-32005|-32602/i.test(msg)) throw err;
+      const mid = from + Math.floor((to - from) / 2);
+      return [...(await this.logsInRange(from, mid, address, topics)), ...(await this.logsInRange(mid + 1, to, address, topics))];
+    }
   }
 
   /** Re-checks receipts of pending deposits; confirms them or marks them orphaned after a reorg. */

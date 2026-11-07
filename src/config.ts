@@ -68,7 +68,7 @@ const schema = z.object({
   POLYGON_USDT_CONTRACT: z.string().default('0xc2132D05D31c914a87C6611C10748AEb04B58e8F'),
 
   EVM_POLL_INTERVAL_MS: z.coerce.number().default(10000),
-  EVM_MAX_BLOCKS_PER_TICK: z.coerce.number().int().positive().default(50),
+  EVM_MAX_BLOCKS_PER_TICK: z.coerce.number().int().positive().default(500),
   EVM_START_BLOCK_LOOKBACK: z.coerce.number().int().nonnegative().default(20),
 
   TON_API_URL: z.string().default('https://toncenter.com/api/v3'),

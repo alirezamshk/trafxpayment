@@ -4,7 +4,7 @@ import { buildServer } from '../src/api/server.js';
 import { currentStep, totpAt } from '../src/lib/totp.js';
 import { migrate } from '../src/bin/migrate.js';
 import { registry } from '../src/context.js';
-import { pool, withTx } from '../src/db.js';
+import { getCursor, pool, withTx } from '../src/db.js';
 import { invoices, ledger } from '../src/services/index.js';
 import { createApiKey, createAdmin, createMerchant } from '../src/services/merchants.js';
 import { EvmWatcher, TRANSFER_TOPIC, type EvmRpc } from '../src/watchers/evm.js';
@@ -187,6 +187,30 @@ describe('EVM watcher (stubbed RPC)', () => {
     await watcher.tick();
     const { rows: d2 } = await pool.query<{ status: string }>(`SELECT status FROM deposits WHERE tx_hash = '0xbad'`);
     expect(d2[0]!.status).toBe('orphaned');
+  });
+
+  it('catches up a long backlog in one tick and splits ranges the node refuses', async () => {
+    const m = await merchant(1);
+    const inv = await invoices.create(m.id, { price_amount: '5', price_currency: 'USD', asset: 'USDT_ERC20' });
+    const usdt = registry.assets.find((a) => a.id === 'USDT_ERC20')!;
+    await pool.query(`INSERT INTO cursors (key, value) VALUES ('evm:ethereum:last_block', '1000')
+                      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+    const head = 5000;
+    const rpc: EvmRpc = {
+      getBlockNumber: async () => head,
+      getLogs: async (f) => {
+        if (f.toBlock - f.fromBlock > 100) throw new Error('could not coalesce error (error={ "code": -32005, "message": "limit exceeded" })');
+        return f.fromBlock <= 4321 && f.toBlock >= 4321
+          ? [{ address: usdt.contract!, topics: [TRANSFER_TOPIC, zeroPadValue('0x2222222222222222222222222222222222222222', 32), zeroPadValue(inv.address!, 32)], data: '0x' + (5_000_000).toString(16).padStart(64, '0'), blockNumber: 4321, blockHash: '0xb4321', transactionHash: '0xbeef', index: 0, removed: false } as unknown as Log]
+          : [];
+      },
+      getBlockTransactions: async () => [],
+      getReceipt: async () => null,
+    };
+    const watcher = new EvmWatcher(registry.chains.ethereum, registry.assets.filter((a) => a.chain === 'ethereum'), invoices, rpc, silent);
+    await watcher.tick();
+    expect(await getCursor(pool, 'evm:ethereum:last_block')).toBe(String(head));
+    expect((await invoices.get(pool, inv.id))!.status).toBe('confirming');
   });
 });
 
